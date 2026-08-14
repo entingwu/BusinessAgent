@@ -1,0 +1,35 @@
+# ===== 密钥与本地配置（绝对不能提交）=====
+.env
+.env.*
+!.env.example
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ===== 测试与类型检查缓存 =====
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ===== 编辑器 =====
+.vscode/
+.idea/
+*.swp
+
+# ===== macOS =====
+.DS_Store
