@@ -24,7 +24,7 @@ class Turn:
     return {
       "turn_id": self.turn_id,
       "user_message": UserMessage.to_dict(self.user_message),
-      "bot_messages": [BotMessage.to_dict(self.bot_message) for bot_message in self.bot_messages],
+      "bot_messages": [BotMessage.to_dict(bot_message) for bot_message in self.bot_messages],
     }
 
   @classmethod
@@ -34,17 +34,12 @@ class Turn:
       user_message=UserMessage.from_dict(data['user_message']),
       bot_messages=[BotMessage.from_dict(bot_msg_dict) for bot_msg_dict in data['bot_messages']],
     )
-    return cls(
-            turn_id=data['turn_id'],
-            user_message=UserMessage.from_dict(data['user_message']),
-            bot_messages=[BotMessage.from_dict(bot_msg_dict) for bot_msg_dict in data['bot_messages']]
-        )
   
 @dataclass(slots=True)
 class Session:
   session_id: str
   started_at: float                   # session created time
-  activated_at: float                  # session activated time: check if it is expired. Created a new session if expired, else reuse current session. Updated activated_at.
+  activated_at: float                 # session activated time: check if it is expired. Created a new session if expired, else reuse current session. Updated activated_at.
   closed_at: float | None = None      # session closed time
   turns: list[Turn]=field(default_factory=list)
 
@@ -89,8 +84,8 @@ class DialogueState:
       "sender_id": self.sender_id,
       "active_task": TaskContext.to_dict(self.active_task) if self.active_task is not None else None,
       "paused_tasks": [TaskContext.to_dict(paused_task) for paused_task in self.paused_tasks],
-      "activated_system_task": SystemContext.to_dict(
-                self.activated_system_task) if self.activated_system_task is not None else None,
+      "active_system_task": SystemContext.to_dict(
+                self.active_system_task) if self.active_system_task is not None else None,
       "focused_object": FocusedObject.to_dict(self.focused_object) if self.focused_object is not None else None,
       "sessions": [Session.to_dict(session) for session in self.sessions],
       "current_session_id": self.current_session_id,
@@ -103,7 +98,7 @@ class DialogueState:
       sender_id=data["sender_id"],
       active_task=TaskContext.from_dict(data['active_task']) if data['active_task'] is not None else None,
       paused_tasks=[TaskContext.from_dict(paused_task_dict) for paused_task_dict in data['paused_tasks']],
-      activated_system_task=SystemContext.from_dict(data['activated_system_task']) if data['activated_system_task'] is not None else None,
+      active_system_task=SystemContext.from_dict(data['active_system_task']) if data['active_system_task'] is not None else None,
       focused_object=FocusedObject.from_dict(data['focused_object']) if data['focused_object'] is not None else None,
       sessions=[Session.from_dict(session_dict) for session_dict in data['sessions']],
       current_session_id=data['current_session_id'],
@@ -170,14 +165,14 @@ class DialogueState:
     # 2.1 No assigned business flow id, resume the most recent business flow from the top of stack
     if flow_id is None:
       paused_task = self.paused_tasks.pop()
-      self.activate_task = paused_task
+      self.active_task = paused_task
       return True
 
     # 2.2 Have assigned business flow id, select from the task based on the assigned business task flow id
-    for index, paused_task in enumerate(self.paused_task):
+    for index, paused_task in enumerate(self.paused_tasks):
       if paused_task.flow_id == flow_id:
         self.active_task = paused_task
-        del self.paused_task[index]
+        del self.paused_tasks[index]
         return True
 
     return False
@@ -220,10 +215,9 @@ class DialogueState:
     Goal: create sesson object, assign value to session attributes
     Returns:
     """
-    now = time.now()
+    now = time.time()
     # 1. Initialize session object
-    session = Session(session_id=str(uuid4().hex()), started_at=now, activated_at=now)
-    self.sessions.append(session)
+    session = Session(session_id=str(uuid4().hex), started_at=now, activated_at=now)
 
     # Update the session id at state
     self.current_session_id = session.session_id
@@ -274,8 +268,8 @@ class DialogueState:
       user_message:
     Returns:
     """
-    # 1. Initialize Turn Object
-    turn = Turn(turn_id=str(uuid4().hex()), user_message=user_message, bot_messages=[])
+    # 1. Initialize New Turn Object
+    turn = Turn(turn_id=str(uuid4().hex), user_message=user_message, bot_messages=[])
 
     # 2. Assign turn object to buffer
     self.pending_turn = turn

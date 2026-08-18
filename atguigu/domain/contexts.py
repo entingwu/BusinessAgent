@@ -48,8 +48,8 @@ class SystemContext:
     return asdict(self)       # type: ignore
 
   @staticmethod
-  def from_dict(self, data: dict[str, Any]) -> "SystemContext":
-    flow_id = data['data_id']
+  def from_dict(data: dict[str, Any]) -> "SystemContext":
+    flow_id = data['flow_id']
     clz =  SYSTEM_CONTEXT_TO_CLASS[flow_id]
     return clz(**data) # 解字典
 

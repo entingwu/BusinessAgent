@@ -6,7 +6,7 @@ import asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy import text
 
-from atguigu.config.config import settings
+from atguigu.config.settings import settings
 
 session_engine: AsyncEngine | None = None
 
@@ -27,8 +27,8 @@ async def main_test():
   init_db_engine()
 
   async with session_factory() as session:
-    cursor = await session.execute("select 1")
-    print(cursor.mappings().fetchone()) # (1,) # 元祖：索引取元组中的元素 {'1': 1} 字典：方便根据列名来获取
+    cursor = await session.execute(text("select 1"))
+    print(cursor.mappings().fetchone()) # 元组：索引取元组中的元素 {'1': 1} 字典：方便根据列名来获取
 
   await dispose_engine()
 

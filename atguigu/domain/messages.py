@@ -38,7 +38,8 @@ class FocusedObject:
       "attributes": self.attributes,
     }
 
-  def from_dict(self, data: dict[str, Any]) -> "FocusedObject":
+  @classmethod
+  def from_dict(cls, data: dict[str, Any]) -> "FocusedObject":
     """
     Convert dict to object
     """
@@ -71,12 +72,13 @@ class UserMessage:
     return {
       "sender_id": self.sender_id,
       "message_id": self.message_id,
-      "type": self.type,
+      "type": self.type.value,
       "text": self.text,
-      "object": FocusedObject.to_dict(self) if self.object is not None else None
+      "object": FocusedObject.to_dict(self.object) if self.object is not None else None
     }
 
-  def from_dict(self, data: dict[str, Any]) -> "UserMessage":
+  @classmethod
+  def from_dict(cls, data: dict[str, Any]) -> "UserMessage":
     """
     Convert dict to object
     """
@@ -85,7 +87,7 @@ class UserMessage:
       message_id=data['message_id'],
       type=MessageType(data['type']),
       text=data['text'],
-      object=FocusedObject.from_dict(self) if data['object'] is not None else None,
+      object=FocusedObject.from_dict(data['object']) if data['object'] is not None else None,
     )
 
 @dataclass(slots=True)
@@ -106,6 +108,12 @@ class BotMessage:
           text=data['text'],
           object=FocusedObject.from_dict(object_data) if object_data is not None else None
       )
+
+
+@dataclass(slots=True)
+class ProcessedResult:
+  message_id: str
+  messages: list[BotMessage]
 
 # slots is False, can add attribute to User
 @dataclass(slots=False)
