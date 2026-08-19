@@ -66,6 +66,7 @@ flows:
       - id: start
         type: start
         next: ask_order_number
+
       - id: ask_order_number
         type: collect
         slot_name: order_number

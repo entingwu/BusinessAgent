@@ -24,7 +24,7 @@ class DialogueStateService:
       dialogue_state = await self._repository.load_state(user_message.sender_id)
 
       # 2. Engine uses (updated attributes of dialog state) for calculation
-      processed_result = await self._engine.handle_message(dialogue_state)
+      processed_result = await self._engine.handle_message(user_message, dialogue_state)
 
       # 3. Save modified dialog state to database I/O
       await self._repository.save_state(user_message.sender_id, dialogue_state)

@@ -5,6 +5,7 @@ Manage service
 from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from atguigu.engines.builder import build_dialogue_engine
 from atguigu.services.dialogue_service import DialogueStateService
 from atguigu.engines.dialogue_engine import DialogueEngine
 from atguigu.repository.dialogue_repository import DialogueRepository
@@ -13,7 +14,7 @@ from atguigu.infrastructure import db_client      # 包下面的模块
 
 
 def get_dialogue_engine():
-  return DialogueEngine()
+  return build_dialogue_engine()
 
 DialogueEngineDep = Annotated[DialogueEngine, Depends(get_dialogue_engine)]
 
