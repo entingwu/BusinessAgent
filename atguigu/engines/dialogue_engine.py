@@ -7,13 +7,14 @@ import time
 
 from atguigu.chitchat.handler import ChitChatHandler
 from atguigu.clarify.responder import ClarifyResponder
-from atguigu.domain.contexts import TaskContext
-from atguigu.domain.messages import BotMessage, MessageType, ProcessedResult, UserMessage
+from atguigu.domain.messages import BotMessage, FocusedObject, MessageType, ProcessedResult, UserMessage
 from atguigu.domain.state import DialogueState
 from atguigu.knowledge.handler import KnowledgeHandler
 from atguigu.plan.planner import TurnPlanner
-from atguigu.plan.turn_plan import TurnPlan
+from atguigu.plan.turn_plan import ClarifyReason, TurnPlan
 from atguigu.plan.validator import TurnPlanValidator
+from atguigu.task.commands.command import Command, SetSlotsCommand
+from atguigu.task.flows.flows import FlowList
 from atguigu.task.handler import TaskHandler
 
 
@@ -29,9 +30,9 @@ class DialogueEngine:
     self.turn_planner = turn_planner
     self.turn_plan_validator = turn_plan_validator
     self.clairfy_responder = clarify_responder
-    self._task_handler = task_handler
-    self._knowledge_handler = knowledge_handler
-    self._chitchat_handler = chitchat_handler
+    self.task_handler = task_handler
+    self.knowledge_handler = knowledge_handler
+    self.chitchat_handler = chitchat_handler
 
   async def handle_message(self, user_message: UserMessage, dialogue_state: DialogueState) -> ProcessedResult:
     """
@@ -54,7 +55,12 @@ class DialogueEngine:
 
     # 3.2 object message
     else:
-      bot_messages = await self._handle_object_message(dialogue_state)
+      # a) Save clicked card save to dialog state
+      dialogue_state.focused_object = user_message.object
+      # b) Process object message
+      bot_messages = await self._handle_object_message(user_message.object, 
+                                                       dialogue_state, 
+                                                       self.task_handler.flow_list)
 
     # 4. Submit
     dialogue_state.pending_turn.bot_messages = bot_messages
@@ -94,6 +100,7 @@ class DialogueEngine:
   def _start_turn(self, user_message: UserMessage, state: DialogueState):
     state.begin_turn(user_message)
 
+
   async def _handle_text_message(self, dialogue_state: DialogueState) -> list[BotMessage]:
     """
     Goal: Process text message (llm analyzes routing, and plan path)
@@ -102,28 +109,108 @@ class DialogueEngine:
     Returns:
     """
     # 1. Use turn planner
-    turn_plan: TurnPlan = await self.turn_planner.predict(dialogue_state, flow_list=self._task_handler.flow_list)
+    turn_plan: TurnPlan = await self.turn_planner.predict(dialogue_state, flow_list=self.task_handler.flow_list, knowledge_intents=self.knowledge_handler.knowledge_intents)
 
     # 2. Use turn validator to evaluate planned result
-    validated = self.turn_plan_validator.validate(turn_plan, dialogue_state)
+    validated = self.turn_plan_validator.validate(turn_plan, 
+                                                  dialogue_state, 
+                                                  flow_list=self.task_handler.flow_list, 
+                                                  knowledge_intents=self.knowledge_handler.knowledge_intents)
 
     # 3. Process validated failure
-    if not validated:
+    if not validated.valid:
       return await self.clairfy_responder.respond(validated, dialogue_state)
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:
-      return self.task_handler.handle()
+      return await self.task_handler.handle(turn_plan.task.commands, dialogue_state)
     elif turn_plan.knowledge is not None:
-      return self.knowledge_handler.handle()
+      return await self.knowledge_handler.handle(dialogue_state,turn_plan.knowledge.intents)
     elif turn_plan.chitchat is not None:
-      return self.chitchat_handler.handle()
+      return await self.chitchat_handler.handle(turn_plan.chitchat.chat, dialogue_state)
     else:
       pass
 
     # 5. Directly return bot message
-    return [BotMessage(text="Hi, I am smart chatbot helper")]
+    return [BotMessage(text="你好，我是一个智能助手")]
 
 
-  async def _handle_object_message(self, dialogue_state: DialogueState) -> list[BotMessage]:
-    pass
+  async def _handle_object_message(self, 
+                                   object: FocusedObject, 
+                                   dialogue_state: DialogueState, 
+                                   flow_list: FlowList) -> list[BotMessage]:
+    """
+    Goal: Process object type, construct set slots command.
+    """
+    # 1. Try to construct SetSlotsCommand object
+    command = self._try_build_set_slots_command(object, dialogue_state, flow_list)
+
+    # 2. check command: 情况3：流程继续推进下一步
+    if command:
+      return await self.task_handler.handle(commands=[command], dialogue_state=dialogue_state)
+
+    if dialogue_state.active_task is not None: # 情况2：流程继续执行，但是不去推进下一步，而是在执行当前这一步
+      return await self.task_handler.handle(commands=[], dialogue_state=dialogue_state)
+
+    # 情况1. 澄清
+    return self.clarify_responder.respond(reason=ClarifyReason.OBJECT_REQUIRES_INTENT, state=dialogue_state)
+
+
+  def _try_build_set_slots_command(self,
+                                   object: FocusedObject,
+                                   dialogue_state: DialogueState,
+                                   flow_list: FlowList) -> Command | None:
+    """
+    Goal: Two card type info (order, product info)
+    Args:
+        dialogue_state
+    """
+    if object.type == "order":
+      if self._is_can_set_slots_command(slot_name="order_number", state=dialogue_state, flow_list=flow_list):
+        return SetSlotsCommand(command="set_slots", slot={"order_number": object.id})
+      return None
+    elif object.type == "product":
+      if self._is_can_set_slots_command(slot_name="product_id", state=dialogue_state, flow_list=flow_list):
+        return SetSlotsCommand(command="set_slots", slot={"product_id": object.id})
+      return None
+    else:
+      return None
+
+  def _is_can_set_slots_command(self,
+                                slot_name: str,
+                                state: DialogueState,
+                                flow_list: FlowList) -> bool:
+    """
+    Goal: Process click card
+    情况1. 没有业务流程， 返回False
+    情况2. 有业务流程, 但是收集步骤的时候, 并不缺少卡片信息, 返回False
+    情况3. 有业务流程, 刚好手机该步骤的时候, 点击卡片信息, 返回True
+    Args:
+        slot_name:
+        state:
+        flow_list:
+    """
+    # 1. Retrieve current flow context
+    task_context = state.active_task
+
+    # 2. Check if current flow context exists, no exist:
+    if task_context is None:
+       return False
+
+    # 3. Check if curent context exist
+    flow = flow_list.get_flow_by_flow_id(task_context.flow_id)
+    if flow is None:  # Protection
+      return False
+
+    # 4. check if flow step exists
+    step_id = task_context.step_id
+    step = flow.get_step_by_id(step_id)
+    if step is None:  # Protection
+      return False
+
+    # 5. Retrieve current step type
+    if not isinstance(step.CollectionFlowStep):
+      return False
+
+    # missing, provided
+    return step.slot_name == slot_name

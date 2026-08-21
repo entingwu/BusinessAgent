@@ -20,6 +20,12 @@ class Flow:
   steps: list[FlowStep]       # flow step
   slots: dict[str, FlowSlot] = field(default_factory=dict)   # slots this flow needs to collect
 
+  def  get_step_by_step_id(self,step_id:str)->FlowStep | None:
+    for  step in self.steps:
+        if step.id== step_id:
+            return  step
+
+    return  None
 
 @dataclass(slots=True)
 class FlowList:
@@ -29,6 +35,12 @@ class FlowList:
   flows: list[Flow]
   slots: dict[str, FlowSlot] = field(default_factory=dict)
 
+  def get_flow_by_flow_id(self,flow_id:str) -> Flow | None:
+    for flow in self.flows:
+        if flow.id == flow_id:
+            return  flow
+
+    return  None
 
 if __name__ == '__main__':
   # 1. pyyaml -> dict

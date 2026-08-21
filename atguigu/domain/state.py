@@ -151,7 +151,7 @@ class DialogueState:
     # 2. Clear current processing business flow.
     self.active_task = None
 
-  def resume_task(self, flow_id: str | None):
+  def resume_task(self, flow_id: str | None = None):
     """
     Goal: Resume stop business task from the business stack
     Args:

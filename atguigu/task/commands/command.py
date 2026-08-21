@@ -36,5 +36,5 @@ COMMAND_TO_CLASS: dict[str, type[Command]] = {
   "start_flow": StartFlowCommand,
   "resume_flow": ResumeFlowCommand,
   "cancel_flow": CancelFlowCommand,
-  "set_slots_flow": SetSlotsCommand,
+  "set_slots": SetSlotsCommand,
 }

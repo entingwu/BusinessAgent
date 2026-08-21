@@ -3,7 +3,10 @@ import json
 from typing import Any
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from sqlalchemy import values
 from atguigu.domain.state import DialogueState
+from atguigu.knowledge.intents import KnowledgeIntent
+from atguigu.plan.turn_plan import TurnPlan
 from atguigu.prompt.loader import load_prompt_template_content
 from atguigu.infrastructure.llm_client import llm_client
 from atguigu.chat_history.builder import ChatHistoryBuilder
@@ -12,7 +15,11 @@ from atguigu.task.flows.flows import FlowList
 class TurnPlanner:
 
   # * 位置参数， 关键字参数
-  async def predict(self, dialogue_state: DialogueState, *, flow_list: FlowList):
+  async def predict(self, 
+                    dialogue_state: DialogueState, 
+                    *, 
+                    flow_list: FlowList, 
+                    knowledge_intents: dict[str, KnowledgeIntent]):
     """
     Goal: Use Turn Planner to analyze routing
     Args:
@@ -21,15 +28,20 @@ class TurnPlanner:
     """
 
     # 1. Construct prompt params for LLM routing analysis
-    prompt_inputs: dict[str, Any] = self._build_prompt_inputs(dialogue_state, flow_list=flow_list)
+    prompt_inputs: dict[str, Any] = self._build_prompt_inputs(dialogue_state, flow_list=flow_list, knowledge_intents=knowledge_intents)
 
     # 2. Call LLM
     llm_result = await self._invoke(prompt_inputs)
+    print('@', llm_result)
 
     # 3. Return LLM result
     return llm_result
 
-  def _build_prompt_inputs(self, state: DialogueState, *, flow_list: FlowList) -> dict[str, Any]:
+  def _build_prompt_inputs(self, 
+                           state: DialogueState, 
+                           *, 
+                           flow_list: FlowList,
+                           knowledge_intents: dict[str, KnowledgeIntent]) -> dict[str, Any]:
     # 1. 会话相关
     user_message_str = ChatHistoryBuilder.build_user_message_str(state.pending_turn.user_message)
     current_conversation_str = ChatHistoryBuilder.build(state.current_session().turns[-10:])
@@ -45,12 +57,12 @@ class TurnPlanner:
     interrupted_tasks_json = json.dumps([paused_task.to_dict() for paused_task in state.paused_tasks],
                                             ensure_ascii=False)
 
+    # 4. 清单相关
     available_flows = [{k:v for k, v in asdict(flow_object).items() if k != "steps"} for flow_object in flow_list.flows if not flow_object.id.startswith("system_")]
 
-    available_flows_json = json.dumps({"flows" : available_flows})
-
-    # TODO: 接入 KnowledgeHandler 后改为真实的 intent 列表
-    knowledge_intents_json = json.dumps([], ensure_ascii=False)
+    available_flows_json = json.dumps({"flows" : available_flows}, ensure_ascii=False)
+    knowledge_intents = [{"id": id, "description": intent.description} for id, intent in knowledge_intents.items()]
+    knowledge_intents_json = json.dumps(knowledge_intents, ensure_ascii=False)
     
     return {
       "user_message": user_message_str,
@@ -62,7 +74,7 @@ class TurnPlanner:
       "available_flows_json": available_flows_json,
     }
 
-  async def _invoke(self, prompt_inputs: dict[str, Any]):
+  async def _invoke(self, prompt_inputs: dict[str, Any]) -> TurnPlan:
     """
     Goal: Use LLM to analyze routing
     Args:
@@ -80,10 +92,10 @@ class TurnPlanner:
 
     # 4. execute chain
     # prompt_template.invoke(prompt_inputs) |> llm_client.invoke()
-    result = await chain.ainvoke(prompt_inputs)
+    llm_result_dict = await chain.ainvoke(prompt_inputs)
 
     # 5. return chain executed result
-    return result
+    return TurnPlan.from_dict(llm_result_dict)
 
 if __name__ == '__main__':
   prompt_template = "{name}喜欢编程"

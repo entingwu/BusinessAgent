@@ -35,7 +35,7 @@ class ChatHistoryBuilder:
 
     @classmethod
     def build_bot_message_str(cls, bot_message: BotMessage) -> str:
-      if bot_message.objecgt is not None:
+      if bot_message.object is not None:
         return cls._render_object_message(bot_message.objecgt)
 
       return cls._render_text_message(bot_message.text)
