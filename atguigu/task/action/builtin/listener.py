@@ -10,4 +10,4 @@ class ActionListener(Action):
   async def run(self,
                 action_args: dict[str, Any],
                 state:DialogueState) -> ActionResult:
-      pass
+      return ActionResult

@@ -1,12 +1,16 @@
 from pathlib import Path
 
 from atguigu.chitchat.handler import ChitChatHandler
+from atguigu.chitchat.responder import ChitChatResponder
 from atguigu.clarify.responder import ClarifyResponder
 from atguigu.engines.dialogue_engine import DialogueEngine
 from atguigu.knowledge.handler import KnowledgeHandler
 from atguigu.knowledge.intents import KNOWLEDGE_INTENTS
+from atguigu.knowledge.provider.knowledge import ApiOrderProvider, ApiProductProvider, FaqDefaultProvider, RagDefaultProvider
+from atguigu.knowledge.provider.register import KnowledgeRegister
 from atguigu.plan.planner import TurnPlanner
 from atguigu.plan.validator import TurnPlanValidator
+from atguigu.task.action.builder import build_action_runner
 from atguigu.task.commands.processor import CommandProcessor
 from atguigu.task.flows.executor import FlowExecutor
 from atguigu.task.flows.flows import FlowList
@@ -30,7 +34,17 @@ def build_dialogue_engine():
       flow_list=flow_list,
       command_processor=CommandProcessor(),
       flow_executor=FlowExecutor(),
+      action_runner=build_action_runner()
     ),
-    knowledge_handler=KnowledgeHandler(KNOWLEDGE_INTENTS),
-    chitchat_handler=ChitChatHandler(),
+    knowledge_handler=KnowledgeHandler(
+      knowledge_intents=KNOWLEDGE_INTENTS,
+      knowledge_register=KnowledgeRegister(providers=[
+        ApiOrderProvider(),
+        ApiProductProvider(),
+        RagDefaultProvider(),
+        FaqDefaultProvider(),
+      ])
+    ),
+    chitchat_handler=ChitChatHandler(
+      chat_responder=ChitChatResponder()),
   )

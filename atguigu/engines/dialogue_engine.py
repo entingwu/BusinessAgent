@@ -15,6 +15,7 @@ from atguigu.plan.turn_plan import ClarifyReason, TurnPlan
 from atguigu.plan.validator import TurnPlanValidator
 from atguigu.task.commands.command import Command, SetSlotsCommand
 from atguigu.task.flows.flows import FlowList
+from atguigu.task.flows.steps import CollectionFlowStep
 from atguigu.task.handler import TaskHandler
 
 
@@ -29,7 +30,7 @@ class DialogueEngine:
                chitchat_handler: ChitChatHandler):
     self.turn_planner = turn_planner
     self.turn_plan_validator = turn_plan_validator
-    self.clairfy_responder = clarify_responder
+    self.clarify_responder = clarify_responder
     self.task_handler = task_handler
     self.knowledge_handler = knowledge_handler
     self.chitchat_handler = chitchat_handler
@@ -153,7 +154,7 @@ class DialogueEngine:
       return await self.task_handler.handle(commands=[], dialogue_state=dialogue_state)
 
     # 情况1. 澄清
-    return self.clarify_responder.respond(reason=ClarifyReason.OBJECT_REQUIRES_INTENT, state=dialogue_state)
+    return await self.clarify_responder.respond(reason=ClarifyReason.OBJECT_REQUIRES_INTENT, state=dialogue_state)
 
 
   def _try_build_set_slots_command(self,
@@ -204,12 +205,12 @@ class DialogueEngine:
 
     # 4. check if flow step exists
     step_id = task_context.step_id
-    step = flow.get_step_by_id(step_id)
+    step = flow.get_step_by_step_id(step_id)
     if step is None:  # Protection
       return False
 
     # 5. Retrieve current step type
-    if not isinstance(step.CollectionFlowStep):
+    if not isinstance(step, CollectionFlowStep):
       return False
 
     # missing, provided

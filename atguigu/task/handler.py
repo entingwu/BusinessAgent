@@ -1,5 +1,6 @@
 from atguigu.domain.messages import BotMessage
 from atguigu.domain.state import DialogueState
+from atguigu.task.action.runner import ActionRunner
 from atguigu.task.commands.command import Command
 from atguigu.task.commands.processor import CommandProcessor
 from atguigu.task.flows.executor import FlowExecutor
@@ -11,22 +12,23 @@ class TaskHandler:
   def __init__(self, 
                flow_list: FlowList, 
                command_processor: CommandProcessor,
-               flow_executor: FlowExecutor):
+               flow_executor: FlowExecutor,
+               action_runner: ActionRunner):
     self.flow_list = flow_list
     self.command_processor = command_processor
     self.flow_executor = flow_executor
+    self.action_runner = action_runner
 
   async def handle(self,
-                  commands: list[Command],
-                  dialogue_state: DialogueState) -> list[BotMessage]:
+                   commands: list[Command],
+                   dialogue_state: DialogueState) -> list[BotMessage]:
     """
     Goal: Flow Processor to process business flow
     1. Use CommandProcessor to modify state and flow task related attributes.
-    2. Use FlowExecutor to read task attribute from state, to push task flow an system flow.
+    2. Use FlowExecutor to read task attribute from state, to push task flow and system flow.
     Args: 
-        state:
         commands:
-
+        dialogue_state:
     Returns:
     """
 
@@ -34,7 +36,10 @@ class TaskHandler:
     self.command_processor.process_commands(commands, dialogue_state, self.flow_list)
 
     # 2. 利用流程推进器推荐流程
-    # bot_messages = await self._flow_executor.executor_flow(state, self.flow_list)
+    bot_messages = await self.flow_executor.execute_flow(
+      dialogue_state, 
+      action_runner=self.action_runner, 
+      flow_list=self.flow_list)
 
     # 3. 返回机器人回复的消息
-    return [BotMessage(text="我是智能小助手")]
+    return [BotMessage(text="我是智能客服小助手")]

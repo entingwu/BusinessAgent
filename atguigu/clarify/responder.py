@@ -21,15 +21,15 @@ class ClarifyResponder:
     prompt_inputs = self._build_prompt_inputs(reason, state)
 
     # 2. 格式化模版，调用LLM
-    bot_messages = await self._invoke(prompt_inputs)
+    rewritten = await self._invoke(prompt_inputs)
 
     # 3. 返回
-    return bot_messages
+    return rewritten
 
   def _build_prompt_inputs(self,
                            reason: ClarifyReason,
                            state: DialogueState) -> dict[str, Any]:
-      user_message_str = ChatHistoryBuilder.build_user_message(state.pending_turn.user_message)
+      user_message_str = ChatHistoryBuilder.build_user_message_str(state.pending_turn.user_message)
       history_str = ChatHistoryBuilder.build(state.current_session().turns[-10:])
       focused_object_str = json.dumps(state.focused_object.to_dict(),
                                       ensure_ascii=False) if state.focused_object is not None else "null"

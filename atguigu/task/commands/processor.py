@@ -1,4 +1,4 @@
-from atguigu.domain.contexts import SystemTaskCanceledContext, SystemTaskInterruptedContext, SystemTaskResumedContext, SystemTaskStartedContext, TaskContext
+from atguigu.domain.contexts import SystemTaskCanceledContext, SystemTaskInterruptedContext, SystemTaskResumeFailedContext, SystemTaskResumedContext, SystemTaskStartedContext, TaskContext
 from atguigu.domain.state import DialogueState
 from atguigu.task.commands.command import CancelFlowCommand, Command, ResumeFlowCommand, SetSlotsCommand, StartFlowCommand
 from atguigu.task.flows.flows import FlowList
@@ -36,7 +36,7 @@ class CommandProcessor:
                   state: DialogueState, 
                   flow_list: FlowList):
     """
-    Goal: 修改state中和任务相关的属性
+    Goal: 开启业务流程. 代码逻辑（激活）更新业务流程上下文以及（激活）系统流程上下文
     """
     # 1. 获取当前要开启的业务流程ID
     start_flow_id = command.flow
@@ -50,6 +50,7 @@ class CommandProcessor:
     # 4. 当前正在执行的业务流程存在
     if activate_task is not None:
       # a) 当前正在执行业务流程的流程ID是等于要开启的业务流程的流程ID
+      #    不用激活业务流程和系统流程
       if activate_task.flow_id == start_flow_id:
         return # 保持当前状态即可
 
@@ -76,6 +77,7 @@ class CommandProcessor:
         started_flow_name=start_flow_name,
       ))
     else:
+    # 5. 当前不存在正在执行的业务流程
       # a) 从栈中移除要开启的业务流程的流程ID（有就移除，没有就不管）
       state.remove_paused_task(start_flow_id)
 
@@ -98,7 +100,7 @@ class CommandProcessor:
                     command: SetSlotsCommand, 
                     state: DialogueState):
     """
-    Goal:
+    Goal: 给业务流程缺失的槽位补全信息。 代码逻辑: 修改状态
     修改state中activated_task的slots属性[将传入过来的槽位信息[槽位名:槽位值] 放到业务流程的slots中]
     """
     state.set_slots(command.slots)  # 最简单
@@ -109,6 +111,10 @@ class CommandProcessor:
                     flow_list: FlowList):
     """
     Goal: 恢复业务流程
+    Args:
+        command
+        state
+        flow_list
     """
     # 1. 获取要恢复的业务流程的流程ID（不一定有，如果在恢复的时候没有明确的恢复目标, 那么flow是None）
     resumed_flow_id = command.flow
@@ -180,6 +186,7 @@ class CommandProcessor:
                    flow_list: FlowList):
     # 1.获取当前系统中正在执行的业务流程
     activated_task = state.active_task
+    activated_flow_id = state.active_task.flow_id
 
     # 2.修改state中的activated_task和activated_system_task [None]
     state.cancel_active_task()
@@ -188,6 +195,6 @@ class CommandProcessor:
     state.start_system_task(SystemTaskCanceledContext(
       flow_id="system_task_canceled",
       step_id="start",
-      canceled_flow_id=activated_task.flow_id,
-      canceled_flow_name=flow_list.get_flow_by_flow_id(activated_task.flow_id).name,
+      canceled_flow_id=activated_flow_id,
+      canceled_flow_name=flow_list.get_flow_by_flow_id(activated_flow_id).name,
     ))

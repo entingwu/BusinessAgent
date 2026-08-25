@@ -1,10 +1,14 @@
+from atguigu.chitchat.responder import ChitChatResponder
 from atguigu.domain.messages import BotMessage
 from atguigu.domain.state import DialogueState
 
 
 class ChitChatHandler:
 
-  async def handle(self,
-                   chitchat: str,
-                   state: DialogueState) -> list[BotMessage]:
-    return []
+    def __init__(self, chat_responder: ChitChatResponder):
+        self.chat_responder = chat_responder
+
+    async def handle(self,
+                     chitchat: str,
+                     state: DialogueState) -> list[BotMessage]:
+        return await self.chat_responder.respond_chat(chitchat, state)

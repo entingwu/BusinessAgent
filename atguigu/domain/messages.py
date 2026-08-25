@@ -7,7 +7,7 @@ No matter transfer via network or read/write via IO, could not directly operate 
 """
 
 from enum import Enum
-from typing import Any, Self
+from typing import Any, Literal, Self
 from dataclasses import dataclass
 
 class MessageType(Enum):
@@ -114,6 +114,13 @@ class BotMessage:
 class ProcessedResult:
   message_id: str
   messages: list[BotMessage]
+
+@dataclass(slots=True)
+class ChatHistoryMessage:
+  session_id: str
+  role: Literal["user", "bot"]
+  text: str | None = None
+  object: FocusedObject
 
 # slots is False, can add attribute to User
 @dataclass(slots=False)

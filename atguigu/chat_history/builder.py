@@ -1,4 +1,6 @@
-from atguigu.domain.messages import UserMessage, BotMessage, MessageType, FocusedObject
+from typing import Literal
+
+from atguigu.domain.messages import ChatHistoryMessage, UserMessage, BotMessage, MessageType, FocusedObject
 from atguigu.domain.state import Turn
 
 
@@ -36,7 +38,7 @@ class ChatHistoryBuilder:
     @classmethod
     def build_bot_message_str(cls, bot_message: BotMessage) -> str:
       if bot_message.object is not None:
-        return cls._render_object_message(bot_message.objecgt)
+        return cls._render_object_message(bot_message.object)
 
       return cls._render_text_message(bot_message.text)
 
@@ -44,6 +46,7 @@ class ChatHistoryBuilder:
     def _render_text_message(cls, text: str) -> str:
       return text.strip()
 
+    @classmethod
     def _render_object_message(cls, object: FocusedObject) -> str:
       id = object.id
       label = "订单" if object.type == "order" else "商品"
@@ -53,4 +56,16 @@ class ChatHistoryBuilder:
       attributes_str = " ".join([f"{k}={v}" for k, v in object.attributes.items()])
 
       return f"[id={id} | label={label} | title={title} | attributes={attributes_str}]"
-    
+
+    @classmethod
+    def build_chat_history(cls, 
+                           session_id: str, 
+                           role: Literal["user", "bot"], 
+                           text: str, 
+                           object: FocusedObject) -> ChatHistoryMessage:
+      return ChatHistoryMessage(
+        session_id=session_id,
+        role=role,
+        text=text,
+        object=object,
+      )
