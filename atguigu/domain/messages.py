@@ -115,12 +115,12 @@ class ProcessedResult:
   message_id: str
   messages: list[BotMessage]
 
-@dataclass(slots=True)
+@dataclass(slots=False)
 class ChatHistoryMessage:
   session_id: str
   role: Literal["user", "bot"]
   text: str | None = None
-  object: FocusedObject
+  object: FocusedObject | None = None
 
 # slots is False, can add attribute to User
 @dataclass(slots=False)

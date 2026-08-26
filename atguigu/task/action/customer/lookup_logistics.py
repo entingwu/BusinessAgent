@@ -18,7 +18,7 @@ class ActionLookupLogistics(Action):
 
     """
     # 1. 获取请求参数
-    order_number = state.active_task.slots('order_number')
+    order_number = state.active_task.slots.get('order_number')
 
     # 2. 给中台服务发送获取订单状态的请求
     payload = await fetch_logistics(order_number)

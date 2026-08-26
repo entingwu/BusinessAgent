@@ -28,6 +28,6 @@ class ActionRunner:
     调用时机: 流程推进器在推进流程且流程步骤是action类型时候, 会调用到
     """
     action = self.action_register.get_action(action_call.action_name)
-    action_result = await action.run(action_call.action_kwargs,state)
+    action_result = await action.run(action_call.action_kwargs, state)
 
     return action_result

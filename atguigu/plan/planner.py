@@ -7,7 +7,7 @@ from sqlalchemy import values
 from atguigu.domain.state import DialogueState
 from atguigu.knowledge.intents import KnowledgeIntent
 from atguigu.plan.turn_plan import TurnPlan
-from atguigu.prompt.loader import load_prompt_template_content
+from atguigu.prompt.loader import load_prompt_template
 from atguigu.infrastructure.llm_client import llm_client
 from atguigu.chat_history.builder import ChatHistoryBuilder
 from atguigu.task.flows.flows import FlowList
@@ -81,7 +81,7 @@ class TurnPlanner:
         prompt_inputs
     """
     # 1. Load prompt template (contain params)
-    prompt_template_str = load_prompt_template_content("turn_plan")
+    prompt_template_str = load_prompt_template("turn_plan")
 
     # 2. prompt template object
     prompt_template = PromptTemplate.from_template(template=prompt_template_str, template_format="jinja2")

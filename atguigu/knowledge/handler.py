@@ -24,7 +24,7 @@ class KnowledgeHandler:
     chunks = []
     # 2. 根据提供者ID，查询提供这对象(Provider)
     for provider_id in provider_ids:
-        provider = self.knowledge_register.get_provider(provider_id)
+        provider = self.knowledge_register.get_provider_by_id(provider_id)
 
         # 3. 调用提供者的检索方法 获取到各个提供者提供的内容
         chunk = await provider.retrival(state)

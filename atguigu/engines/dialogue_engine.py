@@ -120,7 +120,7 @@ class DialogueEngine:
 
     # 3. Process validated failure
     if not validated.valid:
-      return await self.clairfy_responder.respond(validated, dialogue_state)
+      return await self.clarify_responder.respond(validated.reason, dialogue_state)
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:
@@ -168,11 +168,11 @@ class DialogueEngine:
     """
     if object.type == "order":
       if self._is_can_set_slots_command(slot_name="order_number", state=dialogue_state, flow_list=flow_list):
-        return SetSlotsCommand(command="set_slots", slot={"order_number": object.id})
+        return SetSlotsCommand(command="set_slots", slots={"order_number": object.id})
       return None
     elif object.type == "product":
       if self._is_can_set_slots_command(slot_name="product_id", state=dialogue_state, flow_list=flow_list):
-        return SetSlotsCommand(command="set_slots", slot={"product_id": object.id})
+        return SetSlotsCommand(command="set_slots", slots={"product_id": object.id})
       return None
     else:
       return None

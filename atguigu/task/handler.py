@@ -42,4 +42,4 @@ class TaskHandler:
       flow_list=self.flow_list)
 
     # 3. 返回机器人回复的消息
-    return [BotMessage(text="我是智能客服小助手")]
+    return bot_messages

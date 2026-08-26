@@ -8,6 +8,7 @@ from atguigu.knowledge.handler import KnowledgeHandler
 from atguigu.knowledge.intents import KNOWLEDGE_INTENTS
 from atguigu.knowledge.provider.knowledge import ApiOrderProvider, ApiProductProvider, FaqDefaultProvider, RagDefaultProvider
 from atguigu.knowledge.provider.register import KnowledgeRegister
+from atguigu.knowledge.responder import KnowledgeResponder
 from atguigu.plan.planner import TurnPlanner
 from atguigu.plan.validator import TurnPlanValidator
 from atguigu.task.action.builder import build_action_runner
@@ -43,7 +44,8 @@ def build_dialogue_engine():
         ApiProductProvider(),
         RagDefaultProvider(),
         FaqDefaultProvider(),
-      ])
+      ]),
+      knowledge_responder=KnowledgeResponder()
     ),
     chitchat_handler=ChitChatHandler(
       chat_responder=ChitChatResponder()),

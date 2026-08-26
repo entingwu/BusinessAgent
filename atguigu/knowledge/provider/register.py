@@ -9,4 +9,4 @@ class KnowledgeRegister:
 
 
   def get_provider_by_id(self, provider_id: str) -> Provider:
-    pass
+    return self._providers[provider_id]

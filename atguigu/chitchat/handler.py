@@ -11,4 +11,5 @@ class ChitChatHandler:
     async def handle(self,
                      chitchat: str,
                      state: DialogueState) -> list[BotMessage]:
-        return await self.chat_responder.respond_chat(chitchat, state)
+        bot_messages = await self.chat_responder.respond(chitchat, state)
+        return bot_messages

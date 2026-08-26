@@ -1,4 +1,3 @@
-from argparse import Action
 from dataclasses import asdict
 
 from atguigu.domain.contexts import SystemCollectInformationContext
@@ -16,7 +15,7 @@ class FlowExecutor:
                           state: DialogueState, 
                           *, 
                           action_runner, 
-                          flows_list) -> list[BotMessage]:
+                          flow_list) -> list[BotMessage]:
     """
     Goal: 推进两份YAML中流程。目标: 推进业务流程[顺便推进系统流程]
     两层循环：
@@ -38,7 +37,7 @@ class FlowExecutor:
     final_response_messages: list[BotMessage] = []
     while True:
       # 1. 找流程步骤是Action
-      action_call: ActionCall = self._advance_flow_util_action(state, flows_list)
+      action_call: ActionCall = self._advance_flow_util_action(state, flow_list)
 
       # 2. action名字是listen
       if action_call.action_name == "action_listen":
@@ -47,7 +46,7 @@ class FlowExecutor:
       # 3. action名字是action_response或者action_xxx
       action_result=await action_runner.run(action_call, state)
       final_response_messages.extend(action_result.messages)
-      state.set_slots(action_result.update_slots)
+      state.set_slots(action_result.updated_slots)
 
     return final_response_messages
 
@@ -64,8 +63,12 @@ class FlowExecutor:
     Returns:
     """
     while True:
-      # 1. 
+      # 1. 获取要推进的流程的上下文
       current_task = state.current_task()
+
+      # 1.1 业务流程和系统流程都已结束，停下来等用户下一句
+      if current_task is None:
+        return ActionCall(action_name="action_listen")
 
       # 2. 从上下文中流程ID（一个属性 双重身份）
       flow_id = current_task.flow_id
@@ -104,7 +107,7 @@ class FlowExecutor:
       return self._run_end_step(state)
     elif isinstance(step, ActionFlowStep):
       return self._run_action_step(step, state)
-    elif isinstance(self, CollectionFlowStep):
+    elif isinstance(step, CollectionFlowStep):
       return self._run_collection_step(step, state)
     else:
       return None
@@ -122,15 +125,14 @@ class FlowExecutor:
     Returns:
     """
     # 1. 推进下一步
-    self._advance_next_step(step, state, flow_list)
+    self._advance_next_step(step, state)
 
     # 2. 返回None
     return None
 
   def _advance_next_step(self,
                          step: FlowStep,
-                         state: DialogueState,
-                         flow_list: FlowList):
+                         state: DialogueState):
     # 1. 找step_id
     next_step_id = self._find_next_step_id(step, state)
 
@@ -145,7 +147,7 @@ class FlowExecutor:
         return link.target    # step_id
       elif isinstance(link, FlowStepConditionLink):
         # 1. 计算条件表的条件
-        if self._eval_condition(link, state):
+        if self._eval_condition(link.condition, state):
           return link.target  # step_id
       elif isinstance(link, FlowStepFallbackLink):
         return link.target    # step_id
@@ -204,16 +206,30 @@ class FlowExecutor:
 
 
   def _run_collection_step(self, 
-                           step: FlowStep, 
-                           state: DialogueState):
+                           step: CollectionFlowStep, 
+                           state: DialogueState) -> ActionCall | None:
     """
-    Goal: 
+    Goal: 让用户填写业务流程缺少的槽位信息。
+    特点1：
+    步骤类型是collect的，永远只出现在当前两个yml文件中的user_flow.yml中。[收集槽位本质属于业务端]
+    特点2：
+    run_collection_step方法会被触发两次。
+    为什么触发两次，希望对用户填写后的槽位信息做校验。主要是为了在配置文件中如何使用validated校验开关。
+    1. 让用户填写槽位信息, 触发第一次-----返回None,内层循环继续执行(current task),但是不能推进下一步(_advance_next_step)
+    2. 校验用户填写的槽位信息, 触发第二次(校验成功、校验失败)
+    校验成功：执行下一步：调用_advance_next_step, 返回None
+    校验失败：让用户再填写一次(填错的槽位移除掉，构建错误响应), ActionCall
+    Args:
+        steps:
+        state:
+    Returns
     """
     self._try_set_slots_from_object(step, state)
 
-    # 第二次： 校验用户填写的槽位信息
     if state.active_task.slots.get(step.slot_name):
+      # 第二次： 校验用户填写的槽位信息
       if step.validated:
+        # 有校验条件
         if self._eval_condition(condition_expr=step.validated.condition, state=state):
           self._advance_next_step(step, state) # 推进下一步
           return None 
@@ -232,7 +248,7 @@ class FlowExecutor:
         self._advance_next_step(step, state) # 推进下一步
         return None
     else:
-      # 第一次： 让用户填写槽位信息，激活
+      # 第一次： 让用户填写槽位信息，激活system_collect_information
       state.start_system_task(SystemCollectInformationContext(
           flow_id="system_collect_information",
           step_id="start",

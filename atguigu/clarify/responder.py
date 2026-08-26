@@ -4,7 +4,7 @@ from typing import Any
 from atguigu.domain.messages import BotMessage
 from atguigu.domain.state import DialogueState
 from atguigu.plan.turn_plan import TurnPlanValidatedResult, ClarifyReason
-from atguigu.prompt.loader import load_prompt_template_content
+from atguigu.prompt.loader import load_prompt_template
 from atguigu.infrastructure.llm_client import llm_client
 from atguigu.chat_history.builder import  ChatHistoryBuilder
 
@@ -46,7 +46,7 @@ class ClarifyResponder:
 
   async def _invoke(self, prompt_inputs: dict[str, Any]) -> list[BotMessage]:
       # 1. 加载提示词模版
-      prompt_template_str = load_prompt_template_content("clarify_respond")
+      prompt_template_str = load_prompt_template("clarify_respond")
 
       # 2. 实例化提示词模版对象
       prompt_template = PromptTemplate.from_template(template=prompt_template_str, template_format="jinja2")

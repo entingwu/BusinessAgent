@@ -11,6 +11,7 @@ from atguigu.domain.messages import BotMessage
 class ChitChatResponder:
 
   async def respond(self,
+                    chitchat: str,
                     state: DialogueState) -> list[BotMessage]:
       # 1. 加载提示词模版内容
       prompt_template_str = load_prompt_template("knowledge_respond")
@@ -23,7 +24,7 @@ class ChitChatResponder:
 
       # 4. 调用
       result = await  chain.ainvoke({
-          "user_message": ChatHistoryBuilder.build_user_message(state.pending_turn.user_message),
+          "user_message": chitchat,
           "history": ChatHistoryBuilder.build(state.current_session().turns[-10:]),
       })
 
