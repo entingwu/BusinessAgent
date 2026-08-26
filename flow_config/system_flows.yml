@@ -83,6 +83,26 @@ flows:
 
 
 
+  system_task_cancel_failed:
+    description: Flow for explaining that there is no running task to cancel
+    name: task cancel failed acknowledgement
+    steps:
+      - id: start
+        type: start
+        next: acknowledge
+
+      - id: acknowledge
+        type: action
+        action: action_response
+        args:
+          text: "当前没有正在办理的业务，不需要取消。你可以告诉我想查订单、查物流，还是申请退款。"
+        next: end
+
+      - id: end
+        type: end
+        next: [ ]
+
+
   system_task_interrupted:
     description: Flow for acknowledging that the current task has been interrupted
     name: task interrupted acknowledgement

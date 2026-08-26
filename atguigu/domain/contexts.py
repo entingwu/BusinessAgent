@@ -78,6 +78,10 @@ class SystemTaskResumedContext(SystemContext):
 class SystemTaskResumeFailedContext(SystemContext):
   """没有找到可恢复的业务流程时使用。"""
 
+@dataclass(slots=True)
+class SystemTaskCancelFailedContext(SystemContext):
+  """当前没有正在办理的业务流程，没有东西可以取消时使用。"""
+
 # system_task_canceled
 @dataclass(slots=True)
 class SystemTaskCanceledContext(SystemContext):
@@ -107,4 +111,5 @@ SYSTEM_CONTEXT_TO_CLASS: dict[str, type[SystemContext]] = {
   "system_task_canceled": SystemTaskCanceledContext,
   "system_collect_information": SystemCollectInformationContext,
   "system_task_resume_failed": SystemTaskResumeFailedContext,
+  "system_task_cancel_failed": SystemTaskCancelFailedContext,
 }

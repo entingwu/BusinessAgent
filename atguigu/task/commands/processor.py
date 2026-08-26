@@ -1,4 +1,4 @@
-from atguigu.domain.contexts import SystemTaskCanceledContext, SystemTaskInterruptedContext, SystemTaskResumeFailedContext, SystemTaskResumedContext, SystemTaskStartedContext, TaskContext
+from atguigu.domain.contexts import SystemTaskCancelFailedContext, SystemTaskCanceledContext, SystemTaskInterruptedContext, SystemTaskResumeFailedContext, SystemTaskResumedContext, SystemTaskStartedContext, TaskContext
 from atguigu.domain.state import DialogueState
 from atguigu.task.commands.command import CancelFlowCommand, Command, ResumeFlowCommand, SetSlotsCommand, StartFlowCommand
 from atguigu.task.flows.flows import FlowList
@@ -155,7 +155,7 @@ class CommandProcessor:
           flow_id="system_task_interrupted",
           step_id="start",
           interrupted_flow_id=interrupt_flow_id,
-          interrupt_flow_name=interrupt_flow_name,
+          interrupted_flow_name=interrupt_flow_name,
           started_flow_id=state.active_task.flow_id,
           started_flow_name=flow_list.get_flow_by_flow_id(state.active_task.flow_id).name,
         ))
@@ -170,7 +170,7 @@ class CommandProcessor:
             step_id="start"
         ))
         return
-      resumed_flow_id = state.activated_task.flow_id
+      resumed_flow_id = state.active_task.flow_id
       resumed_flow_name = flow_list.get_flow_by_flow_id(resumed_flow_id).name
         
       # c) 恢复成功
@@ -186,7 +186,18 @@ class CommandProcessor:
                    flow_list: FlowList):
     # 1.获取当前系统中正在执行的业务流程
     activated_task = state.active_task
-    activated_flow_id = state.active_task.flow_id
+
+    # 1.1 当前没有正在办理的业务流程，没有东西可以取消。
+    #     激活取消失败的系统流程，给用户一句明确回复，避免返回空消息。
+    if activated_task is None:
+      state.cancel_active_task()
+      state.start_system_task(SystemTaskCancelFailedContext(
+        flow_id="system_task_cancel_failed",
+        step_id="start",
+      ))
+      return
+
+    activated_flow_id = activated_task.flow_id
 
     # 2.修改state中的activated_task和activated_system_task [None]
     state.cancel_active_task()
