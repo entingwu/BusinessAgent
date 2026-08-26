@@ -2,10 +2,17 @@ import asyncio
 import json
 from typing import Any
 
-from atguigu.config import settings
+from atguigu.config.settings import settings
 from atguigu.domain.state import DialogueState
 from atguigu.infrastructure import http_client
 from atguigu.knowledge.provider.provider import KnowledgeChunk, Provider
+
+
+def _base_url() -> str:
+  """
+  Goal: 获取中台服务地址（去掉末尾斜杠，避免拼出 //orders 这类路径）
+  """
+  return settings.commerce_api_base_url.rstrip("/")
 
 
 class ApiOrderProvider(Provider):
@@ -42,12 +49,12 @@ class ApiOrderProvider(Provider):
     ]
 
   async def _fetch_order(self, order_number) -> dict[str, Any]:
-    url = f"{settings.commerce_api_base_url}/orders/{order_number}"
+    url = f"{_base_url()}/orders/{order_number}"
     response = await http_client.http_client.get(url)
     return response.json()["data"]
 
   async def _fetch_logistics(self, order_number) -> dict[str, Any]:
-      url = f"{settings.commerce_api_base_url}/orders/{order_number}/logistics"
+      url = f"{_base_url()}/orders/{order_number}/logistics"
       response = await http_client.http_client.get(url)
       return response.json().get("data", {})
 
@@ -68,7 +75,7 @@ class ApiProductProvider(Provider):
     return [KnowledgeChunk(content=f"商品信息:\n{text}")]
 
   async def _get_product_info_by_id(self, product_id: str) -> dict[str, Any]:
-      url = f"{settings.commerce_api_base_url}/products/{product_id}"
+      url = f"{_base_url()}/products/{product_id}"
       response = await http_client.http_client.get(url)
       return response.json()["data"]
 

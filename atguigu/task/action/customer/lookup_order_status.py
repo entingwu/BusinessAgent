@@ -26,10 +26,10 @@ class ActionLookupOrderStatus(Action):
     # 3. 封装到ActionResult的slots中返回
     return ActionResult(updated_slots={
       "order_status": payload.get("status_desc") or payload.get("status") or "unknown",
-      "order_summary": _build_order_summary(payload),
+      "order_summary": self._build_order_summary(payload),
     })
 
-  def _build_order_summary(payload: dict[str, Any]) -> str:
+  def _build_order_summary(self, payload: dict[str, Any]) -> str:
     parts = []
     if payload.get("amount"):
       parts.append(f"订单金额 ￥{payload['amount']}")

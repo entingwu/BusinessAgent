@@ -33,31 +33,31 @@ class DialogueStateService:
 
 
   async def get_chat_history(self, sender_id: str) -> list[ChatHistoryMessage]:
-      """
-      Goal: 查询该用户所有会话下的聊天内容（当前session下的历史对话）
-      """
-      state = await self._repository.load_state(sender_id)
-      final_chat_history_messages = []
+        """
+        Goal: 查询该用户所有会话下的聊天内容（当前session下的历史对话）
+        """
+        state = await self._repository.load_state(sender_id)
+        final_chat_history_messages = []
 
-      for session in state.sessions:
-          for turn in session.turns:
-              user_message = turn.user_message
-              user_chat_history_message = ChatHistoryBuilder.build_chat_history(
-                  session.session_id,
-                  "user",
-                  user_message.text,
-                  user_message.object,
-              )
-              final_chat_history_messages.append(user_chat_history_message)
+        for session in state.sessions:
+            for turn in session.turns:
+                user_message = turn.user_message
+                user_chat_history_message = ChatHistoryBuilder.build_chat_history(
+                    session.session_id,
+                    "user",
+                    user_message.text,
+                    user_message.object,
+                )
+                final_chat_history_messages.append(user_chat_history_message)
 
-          for bot_message in turn.bot_messages:
-              bot_chat_history_message = ChatHistoryBuilder.build_chat_history(
-                  session.session_id,
-                  "bot",
-                  bot_message.text,
-                  bot_message.object
-              )
-              final_chat_history_messages.append(bot_chat_history_message)
+                for bot_message in turn.bot_messages:
+                    bot_chat_history_message = ChatHistoryBuilder.build_chat_history(
+                        session.session_id,
+                        "bot",
+                        bot_message.text,
+                        bot_message.object
+                    )
+                    final_chat_history_messages.append(bot_chat_history_message)
 
-      return final_chat_history_messages
+        return final_chat_history_messages
     

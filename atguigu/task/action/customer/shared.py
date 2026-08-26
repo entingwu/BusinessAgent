@@ -1,7 +1,7 @@
 from typing import Any
 from urllib.parse import quote
 
-from atguigu.config import settings
+from atguigu.config.settings import settings
 from atguigu.infrastructure import http_client
 
 

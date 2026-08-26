@@ -108,8 +108,15 @@ class TurnPlanValidator:
     if not knowledge.intents:
       return self._reject(ClarifyReason.MISSING_KNOWLEDGE_INTENT)
 
-    for llm_intent in knowledge_intents:
-      knowledge_object = knowledge_intents[llm_intent]
+    # 只校验本轮LLM路由出来的知识意图，不能遍历全量注册表，
+    # 否则任何知识提问都会被 product_info/order_info 的卡片要求拦下来
+    for llm_intent in knowledge.intents:
+      knowledge_object = knowledge_intents.get(llm_intent)
+
+      # LLM 可能给出注册表里不存在的意图ID，此时按"识别不出意图"处理
+      if knowledge_object is None:
+        return self._reject(ClarifyReason.MISSING_KNOWLEDGE_INTENT)
+
       require_type = knowledge_object.requires_object_type
 
       focused_object = dialogue_state.focused_object
