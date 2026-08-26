@@ -43,8 +43,9 @@ class ChatHistoryBuilder:
       return cls._render_text_message(bot_message.text)
 
     @classmethod
-    def _render_text_message(cls, text: str) -> str:
-      return text.strip()
+    def _render_text_message(cls, text: str | None) -> str:
+      # 历史记录里可能存在 text 为 None 的消息，这里做空值保护
+      return text.strip() if text else ""
 
     @classmethod
     def _render_object_message(cls, object: FocusedObject) -> str:
