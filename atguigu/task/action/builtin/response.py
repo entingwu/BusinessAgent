@@ -36,33 +36,33 @@ class ActionResponse(Action):
     # 1. 获取响应的模式
     mode = action_kwargs.get('mode', 'static')
 
-    # 2. 获取要展示的文本（占位）
-    text = action_kwargs['text']
-
-    # 3. 判断模式
+    # 2. 判断模式
     if mode == "rephrase":
+      # rephrase: 先把YAML里的原始文案渲染出来，再让LLM在此基础上改写
       # a) 获取提示词
       prompt = action_kwargs['prompt']
 
       # b) 渲染的文本目标
-      render_text = self._render_text(text, state)
+      render_text = self._render_text(action_kwargs['text'], state)
 
       # c) 调用LLM
       rewritten = await self._call_llm(prompt, state, render_text)
       return ActionResult(messages=[BotMessage(text=rewritten)])
-    
+
     elif mode == "generate":
+      # generate: 从0到1由LLM生成，不依赖YAML里的原始文案，
+      # 所以这里不读取也不渲染 text，current_response 交给 _call_llm 用默认空串
       # a) 获取提示词
       prompt = action_kwargs['prompt']
+
       # b) 调用LLM
-      rewritten = await self._call_llm(prompt, state, render_text)
+      generated = await self._call_llm(prompt, state)
+      return ActionResult(messages=[BotMessage(text=generated)])
+
     else:
-      render_text = self._render_text(text, state)
+      # static: 直接渲染YAML里的文案
+      render_text = self._render_text(action_kwargs['text'], state)
       return ActionResult(messages=[BotMessage(text=render_text)])
-    
-    return ActionResult(messages=[
-      BotMessage(text="rendered_text")
-    ])
 
   async def _call_llm(self, 
                       prompt_template_str: str, 

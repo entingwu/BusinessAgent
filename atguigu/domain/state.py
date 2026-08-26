@@ -206,7 +206,8 @@ class DialogueState:
 
   def remove_slot(self, slot_name: str):
     if self.active_task is not None:
-      self.active_task.slots.pop(slot_name)
+      # 槽位可能已经不存在（例如重复清理），用默认值避免 KeyError
+      self.active_task.slots.pop(slot_name, None)
 
 ########################################### Dialog related methods ###########################################
 
