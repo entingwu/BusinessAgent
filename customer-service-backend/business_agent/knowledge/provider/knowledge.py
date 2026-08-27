@@ -6,6 +6,12 @@ from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
 from business_agent.infrastructure import http_client
 from business_agent.knowledge.provider.provider import KnowledgeChunk, Provider
+from business_agent.knowledge.provider.rag import VectorKnowledgeProvider
+
+# 知识源类型（与 knowledge/ingest/loader.py 的 SOURCE_TYPE_* 保持一致）
+SOURCE_TYPE_FAQ = "faq"
+SOURCE_TYPE_DOCUMENT = "document"
+SOURCE_TYPE_API = "api"
 
 
 def _base_url() -> str:
@@ -44,7 +50,13 @@ class ApiOrderProvider(Provider):
                 },
                 ensure_ascii=False,
                 indent=2,
-            )
+            ),
+            # 实时数据来自业务接口，是权威结果：不参与相似度阈值过滤（规范 3.1.1 / 验收标准 4）
+            chunk_id=f"api.order:{order_number}",
+            source_id="api.order",
+            source_type=SOURCE_TYPE_API,
+            source_title=f"订单接口 {order_number}",
+            position=0,
         )
     ]
 
@@ -72,7 +84,15 @@ class ApiProductProvider(Provider):
     product_id = state.focused_object.id
     data: dict[str, Any] = await self._get_product_info_by_id(product_id)
     text = json.dumps(data, ensure_ascii=False, indent=2)
-    return [KnowledgeChunk(content=f"商品信息:\n{text}")]
+    return [KnowledgeChunk(
+        content=f"商品信息:\n{text}",
+        # 价格与库存等易变数据只能来自接口，不入知识库（规范 3.1.1）
+        chunk_id=f"api.product:{product_id}",
+        source_id="api.product",
+        source_type=SOURCE_TYPE_API,
+        source_title=f"商品接口 {product_id}",
+        position=0,
+    )]
 
   async def _get_product_info_by_id(self, product_id: str) -> dict[str, Any]:
       url = f"{_base_url()}/products/{product_id}"
@@ -80,27 +100,18 @@ class ApiProductProvider(Provider):
       return response.json()["data"]
 
 
-class RagDefaultProvider(Provider):
+class RagDefaultProvider(VectorKnowledgeProvider):
+  """
+  Goal: 商家文档知识检索（退货 / 退款 / 配送 / 平台规则等政策文档）
+        向量 Top-K + 阈值 + metadata 过滤，未命中返回空列表，兜底话术由 responder 决定。
+  """
   provider_id = "rag.default"
-
-  async def retrival(self, state: DialogueState) -> list[KnowledgeChunk]:
-    """
-    调用知识库执行
-    Args:
-        state
-    Returns:
-    """
-    return  [KnowledgeChunk(content="暂未对接FAQ,无法查询到有效的知识内容")]
+  source_types = (SOURCE_TYPE_DOCUMENT,)
 
 
-class FaqDefaultProvider(Provider):
+class FaqDefaultProvider(VectorKnowledgeProvider):
+  """
+  Goal: FAQ 条目检索。FAQ 一条一片入库，命中的就是完整问答对。
+  """
   provider_id = "faq.default"
-
-  async def retrival(self, state: DialogueState) -> list[KnowledgeChunk]:
-    """
-    调用常见问题集文档自行接入
-    Args:
-        state
-    Returns:
-    """
-    return [KnowledgeChunk(content="暂未对接RAG,无法查询到有效的知识内容")]
+  source_types = (SOURCE_TYPE_FAQ,)
