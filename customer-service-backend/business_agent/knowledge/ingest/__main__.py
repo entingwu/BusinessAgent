@@ -79,6 +79,24 @@ async def _cmd_stats(_args) -> None:
   }, ensure_ascii=False, indent=2))
 
 
+async def _cmd_traces(args) -> None:
+  """Goal: 回读某个用户最近几轮的检索溯源记录（retrieval_traces）"""
+
+  async def handler(repository: KnowledgeRepository):
+    return await repository.list_retrieval_traces(args.sender_id, limit=args.limit)
+
+  rows = await run_with_repository(handler)
+  if not rows:
+    print(f"(no retrieval trace for sender_id={args.sender_id})")
+    return
+  for row in rows:
+    score = f"{row['score']:.4f}" if row["score"] is not None else "  -   "
+    print(f"{row['created_at']}  turn={row['turn_id'][:8]}  {row['outcome']:11s} "
+          f"{row['provider_id']:12s} selected={str(row['selected']):5s} "
+          f"drop={str(row['drop_reason'] or '-'):15s} score={score}  "
+          f"{row['chunk_id'] or '-'}  {row['source_title'] or ''}")
+
+
 async def _cmd_query(args) -> None:
   retriever = KnowledgeRetriever(top_k=args.top_k, score_threshold=args.threshold)
   source_types = tuple(args.source_type) if args.source_type else None
@@ -188,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
   query_parser.add_argument("--threshold", type=float, default=None)
   query_parser.add_argument("--source-type", action="append", help="metadata 过滤：faq / document，可重复")
   query_parser.set_defaults(func=_cmd_query)
+
+  traces_parser = subparsers.add_parser("traces", help="回读检索溯源记录（retrieval_traces）")
+  traces_parser.add_argument("--sender-id", required=True)
+  traces_parser.add_argument("--limit", type=int, default=50)
+  traces_parser.set_defaults(func=_cmd_traces)
 
   calibrate_parser = subparsers.add_parser("calibrate", help="用样本集校准相似度阈值")
   calibrate_parser.add_argument("--file", default=None, help=f"用例集 JSONL，默认 {DEFAULT_CALIBRATION_FILE}")

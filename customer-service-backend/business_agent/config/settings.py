@@ -32,6 +32,9 @@ class Settings(BaseSettings):
   knowledge_score_threshold: float      # 余弦相似度阈值，低于视为未命中
   knowledge_context_max_tokens: int     # 拼进提示词的分片总长上限
 
+  knowledge_log_level: str              # knowledge 包的日志级别，检索溯源日志靠它输出
+  knowledge_trace_enabled: bool         # 是否把每轮命中的分片与相似度落到 retrieval_traces 表
+
   model_config= SettingsConfigDict(env_file=ENV_FILE_PATH, env_file_encoding="utf-8")
 
   def resolved_vector_store_dir(self) -> Path:
