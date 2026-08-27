@@ -1,157 +1,157 @@
-# EconChatbot · 电商智能客服后端
+# EconChatbot · E-commerce Customer Service Backend
 
-基于 LLM 的多轮对话客服后端。用户的每句话先由 LLM 规划出本轮意图，再分流到**任务流程 / 知识问答 / 闲聊**三条轨道；任务轨道由 YAML 配置的状态机驱动，负责查订单、查物流、提交退款等需要多轮收集信息的业务。
+An LLM-driven multi-turn customer service backend. Every user message is first run through an LLM planner that decides the intent for the turn, then routed down one of three tracks — **task flow / knowledge Q&A / chitchat**. The task track is driven by a YAML-configured state machine and handles business cases that need multi-turn slot filling: order status, logistics tracking, refund requests, and so on.
 
-技术栈：Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · aiomysql · LangChain · 通义千问（DashScope OpenAI 兼容接口）
+Stack: Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · aiomysql · LangChain · Qwen (DashScope OpenAI-compatible API)
 
-> 本仓库只包含**客服后端**。它运行时还依赖两个不在本仓库的组件：提供订单/物流/商品数据的电商中台服务（默认 `http://127.0.0.1:18081`），以及聊天前端。见下方「外部依赖」。
+> This repository contains the **customer service backend only**. At runtime it also depends on two components that live outside this repo: an e-commerce backend service that serves order/logistics/product data (default `http://127.0.0.1:18081`), and a chat frontend. See [External dependencies](#external-dependencies).
 
-## 快速开始
+## Quick start
 
 ```bash
-# 1. 装依赖（用 uv）
+# 1. Install dependencies (via uv)
 uv sync
 
-# 2. 配置环境变量
+# 2. Configure environment variables
 cp .env.example .env
-# 编辑 .env，至少填入 LLM_API_KEY 和 DATABASE_URL
+# Edit .env — at minimum set LLM_API_KEY and DATABASE_URL
 
-# 3. 起服务
+# 3. Run the service
 uv run python econ_agent/api/main.py
 ```
 
-启动后：
+Once running:
 
-- 接口文档 <http://127.0.0.1:18082/docs>
-- 健康检查 `curl http://127.0.0.1:18082/`
+- API docs: <http://127.0.0.1:18082/docs>
+- Health check: `curl http://127.0.0.1:18082/`
 
-试一轮对话：
+Try a turn of conversation:
 
 ```bash
 curl -X POST http://127.0.0.1:18082/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"sender_id":"u1001","text":"我想查一下我的订单"}'
+  -d '{"sender_id":"u1001","text":"I want to check my order"}'
 ```
 
-## 配置
+## Configuration
 
-所有配置走环境变量，由 [`econ_agent/config/settings.py`](econ_agent/config/settings.py) 从项目根目录的 `.env` 读入（pydantic-settings，缺项直接启动失败）。
+All configuration is environment-driven. [`econ_agent/config/settings.py`](econ_agent/config/settings.py) loads it from `.env` at the project root via pydantic-settings — a missing key fails startup immediately.
 
-| 变量 | 说明 | 示例 |
+| Variable | Description | Example |
 | --- | --- | --- |
-| `LLM_MODEL` | 模型名 | `qwen-plus` |
-| `LLM_BASE_URL` | OpenAI 兼容接口地址 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `LLM_API_KEY` | 模型密钥 | `sk-...` |
-| `COMMERCE_API_BASE_URL` | 电商中台服务地址 | `http://127.0.0.1:18081` |
-| `DATABASE_URL` | MySQL 异步连接串 | `mysql+aiomysql://user:pass@127.0.0.1:13306/custom_service?charset=utf8mb4` |
-| `APP_HOST` / `APP_PORT` | 服务监听地址 | `0.0.0.0` / `18082` |
+| `LLM_MODEL` | Model name | `qwen-plus` |
+| `LLM_BASE_URL` | OpenAI-compatible endpoint | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `LLM_API_KEY` | Model API key | `sk-...` |
+| `COMMERCE_API_BASE_URL` | E-commerce backend service | `http://127.0.0.1:18081` |
+| `DATABASE_URL` | Async MySQL connection string | `mysql+aiomysql://user:pass@127.0.0.1:13306/custom_service?charset=utf8mb4` |
+| `APP_HOST` / `APP_PORT` | Listen address | `0.0.0.0` / `18082` |
 
-**`.env` 已被 `.gitignore` 排除，不要提交。** 新增配置项时请同步更新 `.env.example`。
+**`.env` is excluded by `.gitignore` — never commit it.** When adding a new setting, update `.env.example` alongside it.
 
-## 外部依赖
+## External dependencies
 
-| 依赖 | 用途 | 默认地址 |
+| Dependency | Purpose | Default address |
 | --- | --- | --- |
-| MySQL | 持久化对话状态，表 `dialogue_states`（`sender_id` 主键 + `state_json` TEXT） | `127.0.0.1:13306` |
-| 电商中台服务 | 订单详情 `/orders/{id}`、物流 `/orders/{id}/logistics`、商品、用户订单列表 | `127.0.0.1:18081` |
-| LLM | 轮次规划、知识作答、闲聊、澄清话术 | DashScope |
+| MySQL | Persists dialogue state in table `dialogue_states` (`sender_id` primary key + `state_json` TEXT) | `127.0.0.1:13306` |
+| E-commerce service | Order detail `/orders/{id}`, logistics `/orders/{id}/logistics`, products, per-user order lists | `127.0.0.1:18081` |
+| LLM | Turn planning, knowledge answering, chitchat, clarification wording | DashScope |
 
-中台服务和 MySQL 由同级项目 `ecommerce-service-backend` 的 `docker-compose.yml` 提供（不在本仓库）。
+The e-commerce service and MySQL are provided by the sibling `ecommerce-service-backend` project's `docker-compose.yml` (not in this repo).
 
 ## API
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/` | 健康检查 |
-| `POST` | `/api/chat` | 对话主入口，收 `sender_id` + `text`（或点击卡片时的 `object`） |
-| `GET` | `/api/chat/history?sender_id=` | 该用户全部会话的聊天记录 |
+| `GET` | `/` | Health check |
+| `POST` | `/api/chat` | Main chat entry point; takes `sender_id` + `text` (or `object` when the user clicks a card) |
+| `GET` | `/api/chat/history?sender_id=` | Full chat history across all of that user's sessions |
 | `GET` | `/docs` | Swagger UI |
 
-`POST /api/chat` 的请求/响应模型见 [`econ_agent/api/schemas.py`](econ_agent/api/schemas.py)。
+Request/response models for `POST /api/chat` are defined in [`econ_agent/api/schemas.py`](econ_agent/api/schemas.py).
 
-## 架构
+## Architecture
 
 ```mermaid
 flowchart TD
-    A["POST /api/chat"] --> B["DialogueStateService<br/>从 MySQL 读出 DialogueState"]
-    B --> C["DialogueEngine<br/>建会话 / 开新轮次"]
-    C --> D{"消息类型"}
-    D -->|文本| E["TurnPlanner<br/>LLM 规划本轮意图"]
-    D -->|点击卡片| F["构造 SetSlotsCommand"]
-    E --> G["TurnPlanValidator<br/>校验规划结果"]
-    G -->|不合法| H["ClarifyResponder<br/>澄清追问"]
+    A["POST /api/chat"] --> B["DialogueStateService<br/>load DialogueState from MySQL"]
+    B --> C["DialogueEngine<br/>open session / begin turn"]
+    C --> D{"Message type"}
+    D -->|text| E["TurnPlanner<br/>LLM plans the turn"]
+    D -->|card click| F["build SetSlotsCommand"]
+    E --> G["TurnPlanValidator<br/>validate the plan"]
+    G -->|invalid| H["ClarifyResponder<br/>ask for clarification"]
     G -->|task| I["TaskHandler"]
     G -->|knowledge| J["KnowledgeHandler"]
     G -->|chitchat| K["ChitChatHandler"]
     F --> I
-    I --> L["CommandProcessor 改状态<br/>→ FlowExecutor 推进流程<br/>→ ActionRunner 执行动作"]
+    I --> L["CommandProcessor mutates state<br/>→ FlowExecutor advances the flow<br/>→ ActionRunner executes actions"]
     J --> M["KnowledgeRegister<br/>api.order / api.product / faq / rag"]
-    L --> N["回写 DialogueState 到 MySQL"]
+    L --> N["persist DialogueState back to MySQL"]
     M --> N
     K --> N
     H --> N
     N --> O["ChatResponse"]
 ```
 
-三层职责划分：
+Responsibilities are split across three layers:
 
-- **API 层**（`econ_agent/api/`）只做 API 模型 ↔ 领域模型的转换
-- **Service 层**（`econ_agent/services/`）负责状态的读取与持久化边界
-- **Engine 层**（`econ_agent/engines/`）是纯粹的状态计算，不碰 I/O
+- **API layer** (`econ_agent/api/`) only converts between API models and domain models
+- **Service layer** (`econ_agent/services/`) owns the state load/save boundary
+- **Engine layer** (`econ_agent/engines/`) is pure state computation and touches no I/O
 
-会话有 1 小时闲置过期机制：超时后关闭旧 session、重置运行时状态、开新 session（历史仍保留）。
+Sessions expire after 1 hour of inactivity: the old session is closed, runtime state is reset, and a new session starts (history is preserved).
 
-## 任务流程（Flow）
+## Task flows
 
-流程用 YAML 配置在 [`flow_config/`](flow_config/)，由 `FlowLoader` 载入，改流程不用改代码。
+Flows are configured as YAML under [`flow_config/`](flow_config/) and loaded by `FlowLoader`, so changing a flow needs no code change.
 
-**业务流程**（`user_flows.yml`）：`onboarding` 欢迎引导、`order_status_query` 订单状态查询、`logistics_tracking` 物流查询、`refund_request` 退款申请、`similar_product_recommendation` 相似商品推荐、`human_handoff` 人工客服
+**Business flows** (`user_flows.yml`): `onboarding`, `order_status_query`, `logistics_tracking`, `refund_request`, `similar_product_recommendation`, `human_handoff`
 
-**系统流程**（`system_flows.yml`）：任务启动确认、信息收集、任务恢复/恢复失败、任务中断/取消/取消失败、无法处理
+**System flows** (`system_flows.yml`): task started, collect information, task resumed / resume failed, task interrupted / canceled / cancel failed, cannot handle
 
-流程步骤类型有 `start` / `action` / `collect` / `end`，通过 `next` 串联。`collect` 步骤会挂起流程去追问用户填槽（slot），拿到后继续推进 —— 用户中途插话问别的，原流程会被中断并在之后尝试恢复。
+Step types are `start` / `action` / `collect` / `end`, chained together via `next`. A `collect` step suspends the flow to ask the user for a slot value, then resumes once it is filled — if the user changes the subject mid-flow, the original flow is interrupted and an attempt is made to resume it later.
 
-**指令**（`econ_agent/task/commands/`）：`start_flow`、`set_slots`、`resume_flow`、`cancel_flow`。LLM 规划出的就是这些指令。
+**Commands** (`econ_agent/task/commands/`): `start_flow`, `set_slots`, `resume_flow`, `cancel_flow`. These are exactly what the LLM planner emits.
 
-**动作**（`econ_agent/task/action/`）：内置 `action_response`（回复）、`action_listen`（等待用户输入）；业务动作有查订单状态、查物流、推荐相似商品。`econ_agent/task/action/customer/` 下的动作类由 `builder.py` 用 `pkgutil` **自动扫描注册**，新增动作只要在该目录放一个继承 `Action` 的类即可，不用手动登记。
+**Actions** (`econ_agent/task/action/`): built-in `action_response` (reply) and `action_listen` (wait for user input); business actions cover order status lookup, logistics lookup, and similar-product recommendation. Action classes under `econ_agent/task/action/customer/` are **discovered and registered automatically** by `builder.py` via `pkgutil` — to add one, just drop a class extending `Action` into that directory; no manual registration needed.
 
-## 知识问答
+## Knowledge Q&A
 
-7 个知识意图定义在 [`econ_agent/knowledge/intents.py`](econ_agent/knowledge/intents.py)，每个意图挂载若干 provider：
+Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](econ_agent/knowledge/intents.py), each wired to one or more providers:
 
-| 意图 | Provider |
+| Intent | Providers |
 | --- | --- |
-| `product_info` 商品信息 | `api.product`（需要商品卡片上下文） |
-| `order_info` 订单信息 | `api.order`（需要订单卡片上下文） |
+| `product_info` | `api.product` (requires product card context) |
+| `order_info` | `api.order` (requires order card context) |
 | `refund_policy` / `return_policy` / `shipping_policy` | `faq.default` + `rag.default` |
-| `platform_rule` 平台规则 | `rag.default` |
-| `general_ecommerce_info` 电商通用 | `faq.default` + `rag.default` |
+| `platform_rule` | `rag.default` |
+| `general_ecommerce_info` | `faq.default` + `rag.default` |
 
-## 目录结构
+## Project layout
 
 ```
 econ_agent/
-├── api/            FastAPI 应用、路由、请求响应模型、依赖注入
-├── services/       对话服务，状态读写边界
-├── engines/        对话引擎 + 依赖装配（builder.py）
-├── plan/           LLM 轮次规划与校验
-├── task/           任务轨道：flows / commands / action
-├── knowledge/      知识轨道：intents + provider
-├── chitchat/       闲聊轨道
-├── clarify/        澄清追问
-├── domain/         领域模型：消息、上下文、对话状态
-├── repository/     SQLAlchemy 持久化
-├── infrastructure/ DB / HTTP / LLM 客户端
-├── prompt/         Jinja2 提示词模板
-└── config/         配置
-flow_config/        流程 YAML
+├── api/            FastAPI app, routes, request/response models, DI
+├── services/       Dialogue service — the state read/write boundary
+├── engines/        Dialogue engine + dependency wiring (builder.py)
+├── plan/           LLM turn planning and validation
+├── task/           Task track: flows / commands / action
+├── knowledge/      Knowledge track: intents + providers
+├── chitchat/       Chitchat track
+├── clarify/        Clarification prompts
+├── domain/         Domain models: messages, contexts, dialogue state
+├── repository/     SQLAlchemy persistence
+├── infrastructure/ DB / HTTP / LLM clients
+├── prompt/         Jinja2 prompt templates
+└── config/         Settings
+flow_config/        Flow YAML
 ```
 
-提示词模板在 `econ_agent/prompt/jinja2/`（`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`），调整话术改这里。
+Prompt templates live in `econ_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
 
-## 调试
+## Debugging
 
-VS Code 用下面这个配置起服务，在任意文件打断点都能命中（`main.py` 没开 `reload`，是单进程）：
+Use this VS Code configuration to launch the service; breakpoints anywhere will be hit, since `main.py` does not enable `reload` and therefore runs single-process:
 
 ```jsonc
 {
@@ -165,16 +165,16 @@ VS Code 用下面这个配置起服务，在任意文件打断点都能命中（
 }
 ```
 
-注意：不要用「调试当前文件」去跑 `handler.py` 这类没有 `__main__` 的模块，那样只会导入一遍就退出，断点不会命中。若日后给 `uvicorn.run` 加了 `reload=True` 或 `workers=`，会 fork 子进程导致断点失效，需要额外加 `"subProcess": true`。
+Do not use "debug current file" on a module like `handler.py` that has no `__main__` — it will just import once and exit, and no breakpoint will be hit. If `reload=True` or `workers=` is ever added to `uvicorn.run`, uvicorn forks a subprocess and breakpoints stop working; add `"subProcess": true` in that case.
 
-引擎默认开了 `echo=True`，控制台会打印全部 SQL，嫌吵可以在 [`econ_agent/infrastructure/db_client.py`](econ_agent/infrastructure/db_client.py) 关掉。
+The engine runs with `echo=True`, so every SQL statement is printed to the console. Turn it off in [`econ_agent/infrastructure/db_client.py`](econ_agent/infrastructure/db_client.py) if it gets noisy.
 
-几个模块可以单独跑起来验证：
+A few modules can be run standalone as a sanity check:
 
 ```bash
-uv run python -m econ_agent.config.settings          # 配置是否读到
-uv run python -m econ_agent.infrastructure.db_client # 数据库能否连通
-uv run python -m econ_agent.task.action.builder      # 动作是否注册成功
+uv run python -m econ_agent.config.settings          # config loads?
+uv run python -m econ_agent.infrastructure.db_client # database reachable?
+uv run python -m econ_agent.task.action.builder      # actions registered?
 ```
 
-这里必须用 `-m`：本项目没有以包的形式安装，`uv run python <文件路径>` 只会把该文件所在目录放进 `sys.path`，直接跑会报 `ModuleNotFoundError: No module named 'econ_agent'`。`econ_agent/api/main.py` 是例外，它自己在开头把项目根目录插进了 `sys.path`。
+`-m` is required here: the project is not installed as a package, so `uv run python <file path>` only puts that file's own directory on `sys.path` and running it directly fails with `ModuleNotFoundError: No module named 'econ_agent'`. `econ_agent/api/main.py` is the exception — it inserts the project root into `sys.path` itself at the top of the file.
