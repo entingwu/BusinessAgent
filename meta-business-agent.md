@@ -744,3 +744,49 @@ canvas 粒子系统与连线、双光晕轨道动画、页底渐变动画、全�
 参考实现把每轮对话包在带 `Turn N` 徽章的卡片里，这是调试视角，Meta 风格中没有对应物。
 
 **处置**：保留轮次概念但弱化呈现——去掉外框与徽章底色，改为浅灰小字标记，消息回归左右对齐的气泡。调试需要时可通过开关恢复完整卡片。
+
+------
+
+# 附录 E. 消息协议（一次定死）
+
+> 对应 3.2 的要求与 B.6 第 2 条。前后端按同一份协议走，不接受二次修改。本附录是唯一权威定义。
+
+## E.1 结构
+
+`ChatObject` 不变：`{ id, title, type, attributes }`，`type` 为 `"product"` / `"order"`。
+
+`POST /api/chat` 响应：
+
+```jsonc
+{
+  "message_id": "...",
+  "control_owner": "AGENT",          // 新增。AGENT | PENDING_HUMAN | HUMAN，缺省 AGENT
+  "messages": [
+    {
+      "text": "为你找到 3 款符合预算的",
+      "object": null,                 // 保留，兼容旧行为；等价于 cards 只有一项
+      "cards": [ /* ChatObject, ... */ ],   // 新增，缺省 []
+      "suggestions": ["看看更便宜的", "换个颜色"]  // 新增，缺省 []
+    }
+  ]
+}
+```
+
+`GET` 历史接口的响应同样带 `control_owner`。
+
+## E.2 三条规则
+
+1. **一条 bot 消息可以同时有 text、cards、suggestions**。这是与旧行为最大的区别——旧的 `BotMessage` 是 text 与 object 二选一，导致带卡片时快捷回复被丢弃。
+2. **`object` 与 `cards` 不并存**。后端要么发 `object`（单个，旧路径），要么发 `cards`（列表，新路径）。前端归一化：`cards?.length ? cards : (object ? [object] : [])`，因此后端尚未改造时前端也能正常工作。
+3. **`control_owner` 是会话级而非消息级**，挂在响应顶层。`HUMAN` 时前端禁用输入并显示接管提示（对应 3.3.4 第一档的「界面显示当前控制权归属」）。
+
+## E.3 落地位置
+
+| 端 | 文件 | 改动 |
+|---|---|---|
+| 后端 | `domain/messages.py` | `BotMessage` 加 `cards: list[FocusedObject]`、`suggestions: list[str]`，**`to_dict` / `from_dict` 两个方法都要改**，否则状态回读时静默丢失 |
+| 后端 | `api/schemas.py` | `ChatBotMessage` 加同名字段；`ChatResponse` / `ChatHistoryResponse` 加 `control_owner` |
+| 后端 | `api/chat_router.py` | `_build_chat_response` 透传新字段 |
+| 前端 | `src/App.vue` | 归一化按 E.2 第 2 条；渲染文本 + 卡片列表 + 快捷回复三段共存 |
+
+> 前端可以先行——按 E.2 第 2 条写的归一化对今天的后端返回完全兼容，后端补齐后无需再改前端。
