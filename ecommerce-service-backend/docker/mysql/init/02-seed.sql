@@ -18,6 +18,9 @@ INSERT INTO users (id, user_id, nickname, level, mobile_masked, created_at) VALU
 --      attr=size:大号 检索不到服饰，attr=size:M 检索不到硬件。
 --   2. size 是商品级属性而不是变体轴：每件服饰只有一个尺码，「同款换个 L 码」
 --      在现有 products 表里无法表达，要支持得加 SKU 变体表。color 同理。
+--   3. attr 的属性值走子串模糊匹配，单字母尺码在当前取值下没问题，但补进 XS / XL 的
+--      那一天必须把 size 改成精确匹配：否则 attr=size:S 会连 XS 一起命中，
+--      attr=size:L 会连 XL / XXL 一起命中。
 INSERT INTO products (id, product_id, title, description, price, stock_status, cover_url, attributes_json, created_at) VALUES
 (1, 'p2001', '静音机械键盘 87 键',
  '87 键紧凑布局，红轴静音设计，支持三模连接与全键无冲，附赠键帽起拔器。',
