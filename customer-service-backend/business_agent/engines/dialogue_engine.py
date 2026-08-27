@@ -20,6 +20,11 @@ from business_agent.task.flows.steps import CollectionFlowStep
 from business_agent.task.handler import TaskHandler
 
 
+# user_flows.yml 里既有的转人工流程。它自己会回一句转接提示，
+# 所以接管策略命中同一轮时不再重复补话
+HUMAN_HANDOFF_FLOW_ID = "human_handoff"
+
+
 class DialogueEngine:
 
   def __init__(self, 
@@ -59,10 +64,11 @@ class DialogueEngine:
     # 4. Spliting Message (text, object)
     # 4.1 Text message
     if user_message.type is MessageType.TEXT:
-      bot_messages = await self._handle_text_message(dialogue_state)
+      bot_messages, handoff_flow_ran, is_knowledge = await self._handle_text_message(dialogue_state)
 
     # 4.2 object message
     else:
+      handoff_flow_ran = is_knowledge = False
       # a) Save clicked card save to dialog state
       dialogue_state.focused_object = user_message.object
       # b) Process object message
@@ -71,7 +77,8 @@ class DialogueEngine:
                                                        self.task_handler.flow_list)
 
     # 5. 接管判定：本轮处理完再判，这样「连续失败」的计数已经反映了这一轮
-    bot_messages = self._apply_handoff_policy(user_message, dialogue_state, bot_messages)
+    bot_messages = self._apply_handoff_policy(user_message, dialogue_state, bot_messages,
+                                             handoff_flow_ran, is_knowledge)
 
     # 6. Submit
     return self._commit(user_message, dialogue_state, bot_messages)
@@ -95,13 +102,18 @@ class DialogueEngine:
   def _apply_handoff_policy(self,
                             user_message: UserMessage,
                             state: DialogueState,
-                            bot_messages: list[BotMessage]) -> list[BotMessage]:
+                            bot_messages: list[BotMessage],
+                            handoff_flow_ran: bool,
+                            is_knowledge: bool) -> list[BotMessage]:
     """
-    Goal: 判断本轮是否触发转人工；触发则切 PENDING_HUMAN 并追加一句提示
+    Goal: 判断本轮是否触发转人工；触发则切 PENDING_HUMAN 并按需追加一句提示
     Args:
         user_message: 本轮用户消息，卡片消息没有文本
         state:
         bot_messages: 本轮已经产生的回复
+        handoff_flow_ran: 本轮是否已经跑过 human_handoff 流程。跑过就别再补提示——
+                          那个流程自己会说「我来为你转接人工客服」，
+                          否则一次转接会连着播三句意思相同的话
     Returns:
         可能追加了提示的回复列表
     """
@@ -109,6 +121,7 @@ class DialogueEngine:
       text=user_message.text,
       consecutive_clarify=state.consecutive_clarify,
       consecutive_knowledge_miss=state.consecutive_knowledge_miss,
+      is_knowledge_question=is_knowledge,
     )
     if not decision.needed:
       return bot_messages
@@ -116,7 +129,7 @@ class DialogueEngine:
     # 已经在排队了就不再重复提示，否则用户每说一句都收到一遍「正在转接」
     already_pending = state.control_owner is handoff_control.ControlOwner.PENDING_HUMAN
     state.request_handoff(decision.trigger, decision.reason)
-    if already_pending:
+    if already_pending or handoff_flow_ran:
       return bot_messages
 
     notice = handoff_control.PENDING_NOTICE.get(decision.trigger)
@@ -154,12 +167,13 @@ class DialogueEngine:
     state.begin_turn(user_message)
 
 
-  async def _handle_text_message(self, dialogue_state: DialogueState) -> list[BotMessage]:
+  async def _handle_text_message(self, dialogue_state: DialogueState) -> tuple[list[BotMessage], bool, bool]:
     """
     Goal: Process text message (llm analyzes routing, and plan path)
     Args: 
         dialogue_state
     Returns:
+        (回复列表, 本轮是否跑过 human_handoff 流程, 本轮是否为知识咨询)
     """
     # 1. Use turn planner
     turn_plan: TurnPlan = await self.turn_planner.predict(dialogue_state, flow_list=self.task_handler.flow_list, knowledge_intents=self.knowledge_handler.knowledge_intents)
@@ -174,23 +188,23 @@ class DialogueEngine:
     if not validated.valid:
       # 连续澄清失败是「Agent 处理不了」的信号，累计到阈值触发转人工
       dialogue_state.note_clarify(happened=True)
-      return await self.clarify_responder.respond(validated.reason, dialogue_state)
+      return await self.clarify_responder.respond(validated.reason, dialogue_state), False, False
 
     # 识别成功，连续失败计数清零
     dialogue_state.note_clarify(happened=False)
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:
-      return await self.task_handler.handle(turn_plan.task.commands, dialogue_state)
+      handoff_flow_ran = any(
+        getattr(command, "flow", None) == HUMAN_HANDOFF_FLOW_ID for command in turn_plan.task.commands)
+      return await self.task_handler.handle(turn_plan.task.commands, dialogue_state), handoff_flow_ran, False
     elif turn_plan.knowledge is not None:
-      return await self.knowledge_handler.handle(dialogue_state,turn_plan.knowledge.intents)
+      return await self.knowledge_handler.handle(dialogue_state,turn_plan.knowledge.intents), False, True
     elif turn_plan.chitchat is not None:
-      return await self.chitchat_handler.handle(turn_plan.chitchat.chat, dialogue_state)
-    else:
-      pass
+      return await self.chitchat_handler.handle(turn_plan.chitchat.chat, dialogue_state), False, False
 
     # 5. Directly return bot message
-    return [BotMessage(text="你好，我是一个智能助手")]
+    return [BotMessage(text="你好，我是一个智能助手")], False, False
 
 
   async def _handle_object_message(self, 
