@@ -64,11 +64,11 @@ class DialogueEngine:
     # 4. Spliting Message (text, object)
     # 4.1 Text message
     if user_message.type is MessageType.TEXT:
-      bot_messages, handoff_flow_ran, is_knowledge = await self._handle_text_message(dialogue_state)
+      bot_messages, handoff_flow_ran, handled_by_flow = await self._handle_text_message(dialogue_state)
 
     # 4.2 object message
     else:
-      handoff_flow_ran = is_knowledge = False
+      handoff_flow_ran = handled_by_flow = False
       # a) Save clicked card save to dialog state
       dialogue_state.focused_object = user_message.object
       # b) Process object message
@@ -78,7 +78,7 @@ class DialogueEngine:
 
     # 5. 接管判定：本轮处理完再判，这样「连续失败」的计数已经反映了这一轮
     bot_messages = self._apply_handoff_policy(user_message, dialogue_state, bot_messages,
-                                             handoff_flow_ran, is_knowledge)
+                                             handoff_flow_ran, handled_by_flow)
 
     # 6. Submit
     return self._commit(user_message, dialogue_state, bot_messages)
@@ -104,7 +104,7 @@ class DialogueEngine:
                             state: DialogueState,
                             bot_messages: list[BotMessage],
                             handoff_flow_ran: bool,
-                            is_knowledge: bool) -> list[BotMessage]:
+                            handled_by_flow: bool) -> list[BotMessage]:
     """
     Goal: 判断本轮是否触发转人工；触发则切 PENDING_HUMAN 并按需追加一句提示
     Args:
@@ -121,7 +121,7 @@ class DialogueEngine:
       text=user_message.text,
       consecutive_clarify=state.consecutive_clarify,
       consecutive_knowledge_miss=state.consecutive_knowledge_miss,
-      is_knowledge_question=is_knowledge,
+      handled_by_flow=handled_by_flow,
     )
     if not decision.needed:
       return bot_messages
@@ -173,7 +173,7 @@ class DialogueEngine:
     Args: 
         dialogue_state
     Returns:
-        (回复列表, 本轮是否跑过 human_handoff 流程, 本轮是否为知识咨询)
+        (回复列表, 本轮是否跑过 human_handoff 流程, 本轮是否被配置的流程或知识意图接住)
     """
     # 1. Use turn planner
     turn_plan: TurnPlan = await self.turn_planner.predict(dialogue_state, flow_list=self.task_handler.flow_list, knowledge_intents=self.knowledge_handler.knowledge_intents)
@@ -197,7 +197,7 @@ class DialogueEngine:
     if turn_plan.task is not None:
       handoff_flow_ran = any(
         getattr(command, "flow", None) == HUMAN_HANDOFF_FLOW_ID for command in turn_plan.task.commands)
-      return await self.task_handler.handle(turn_plan.task.commands, dialogue_state), handoff_flow_ran, False
+      return await self.task_handler.handle(turn_plan.task.commands, dialogue_state), handoff_flow_ran, True
     elif turn_plan.knowledge is not None:
       return await self.knowledge_handler.handle(dialogue_state,turn_plan.knowledge.intents), False, True
     elif turn_plan.chitchat is not None:

@@ -29,7 +29,7 @@ class ActionLookupLogistics(Action):
         return ActionResult(updated_slots={
             "tracking_number": "未知",
             "logistics_company": "未知",
-            "logistics_status": "暂时无法查到物流信息，请稍后再试。",
+            "logistics_status": "暂时无法查到物流信息，请稍后再试",
             "logistics_traces": "",
         })
 

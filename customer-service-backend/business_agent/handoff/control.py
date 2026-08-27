@@ -82,7 +82,7 @@ def evaluate(text: str | None,
              consecutive_clarify: int,
              consecutive_knowledge_miss: int,
              extra_keywords: tuple[str, ...] = (),
-             is_knowledge_question: bool = False) -> HandoffDecision:
+             handled_by_flow: bool = False) -> HandoffDecision:
   """
   Goal: 判断当前这轮是否该转人工
   Args:
@@ -90,10 +90,11 @@ def evaluate(text: str | None,
       consecutive_clarify: 连续澄清失败次数
       consecutive_knowledge_miss: 连续知识检索未命中次数
       extra_keywords: 商家配置的额外关键词
-      is_knowledge_question: 本轮是否被规划为知识咨询。为真时不按高风险话题转人工——
-          「你们退货政策几天」和「我要退货」共享同一批词，但前者正是知识库该答的
-          （return_policy / refund_policy 本来就是知识意图），把它转走等于让
-          RAG 永远没有用武之地
+      handled_by_flow: 本轮是否已被商家配置的能力接住（知识意图或业务流程）。
+          为真时不按高风险话题转人工——高风险话题的本意是「Agent 不该自己硬答」，
+          但商家专门配了 refund_request 流程或 return_policy 知识意图来接这件事，
+          那就是商家选定的处理方式，再转人工既多余又互相矛盾：
+          用户会同时收到「请告诉我你的订单号」和「已帮你转人工」两条指令
   Returns:
       HandoffDecision；needed 为真时带上触发原因
   """
@@ -106,8 +107,9 @@ def evaluate(text: str | None,
     if (hit := _hit(content, extra_keywords)) is not None:
       return HandoffDecision(True, HandoffTrigger.KEYWORD, f"命中配置关键词「{hit}」")
 
-    # 高风险话题只在「用户在提诉求」时成立；被规划为知识咨询就是在问规则，不转
-    if not is_knowledge_question and (hit := _hit(content, RISKY_TOPIC_KEYWORDS)) is not None:
+    # 高风险话题只在「没有配置流程接住」时才转——闲聊轨道或澄清失败时提到投诉、
+    # 议价，才是真正需要人介入的场景
+    if not handled_by_flow and (hit := _hit(content, RISKY_TOPIC_KEYWORDS)) is not None:
       return HandoffDecision(True, HandoffTrigger.RISKY_TOPIC, f"命中高风险话题「{hit}」")
 
   # 计数类触发放在关键词之后：关键词是明确信号，计数是推断，明确的优先
