@@ -12,6 +12,12 @@ INSERT INTO users (id, user_id, nickname, level, mobile_masked, created_at) VALU
 -- 对应 meta-business-agent.md 3.3.3 要收集的偏好维度（预算维度落在 price 列，不进 attributes）。
 -- 原先各商品自定义的细节键（轴体 / 降噪深度 / 接口 …）已合并进 spec 的自由文本，
 -- 不是漏写：key 各写各的时候没有任何一维是可过滤的。
+--
+-- size 的两条已知限制（是当前数据模型的边界，不是漏做）：
+--   1. 硬件类用 标准/大号/小号，服饰类用 S/M/L，两套刻度不互通——
+--      attr=size:大号 检索不到服饰，attr=size:M 检索不到硬件。
+--   2. size 是商品级属性而不是变体轴：每件服饰只有一个尺码，「同款换个 L 码」
+--      在现有 products 表里无法表达，要支持得加 SKU 变体表。color 同理。
 INSERT INTO products (id, product_id, title, description, price, stock_status, cover_url, attributes_json, created_at) VALUES
 (1, 'p2001', '静音机械键盘 87 键',
  '87 键紧凑布局，红轴静音设计，支持三模连接与全键无冲，附赠键帽起拔器。',
@@ -91,7 +97,7 @@ INSERT INTO products (id, product_id, title, description, price, stock_status, c
 (16, 'p2016', '纯棉圆领 T 恤',
  '260g 精梳棉，双纱领口不易变形，肩线落肩 1cm，四季可穿。',
  99.00, '有货', 'https://picsum.photos/seed/p2016/400/400',
- '{"use_case": "居家", "style": "极简", "spec": "260g 精梳棉 / 圆领 / 常规版型", "size": "M", "color": "白", "brand": "素野", "warranty": "无"}',
+ '{"use_case": "居家", "style": "极简", "spec": "260g 精梳棉 / 圆领 / 常规版型", "size": "S", "color": "白", "brand": "素野", "warranty": "无"}',
  '2025-03-28 12:00:00'),
 (17, 'p2017', '双面抓绒卫衣',
  '双面抓绒面料，落肩宽松版型，罗纹下摆，内里起绒保暖。',
@@ -109,7 +115,7 @@ INSERT INTO products (id, product_id, title, description, price, stock_status, c
  '{"use_case": "运动", "style": "运动", "spec": "冰感速干 / UPF50+ / 网眼透气", "size": "L", "color": "荧光绿", "brand": "素野", "warranty": "无"}',
  '2025-04-22 12:00:00'),
 (20, 'p2020', '316 不锈钢保温杯 500ml',
- '316 医用级不锈钢内胆，六小时保温 60℃ 以上，一键弹盖，杯口不烫嘴。',
+ '316 医用级不锈钢内胆，12 小时长效保温，六小时后杯内仍在 60℃ 以上，一键弹盖，杯口不烫嘴。',
  89.00, '有货', 'https://picsum.photos/seed/p2020/400/400',
  '{"use_case": "差旅", "style": "北欧", "spec": "500ml / 316 不锈钢 / 保温 12 小时 / 一键弹盖", "size": "小号", "color": "米白", "brand": "木言", "warranty": "一年"}',
  '2025-05-06 12:00:00'),

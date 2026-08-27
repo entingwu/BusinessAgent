@@ -46,6 +46,13 @@ _IN_STOCK_STATUSES = ("有货", "现货", "有库存")
 
 _LIKE_ESCAPE_CHAR = "\\"
 
+# attributes_json 的 key 是一套固定集合（见 docker/mysql/init/02-seed.sql 头部注释）。
+# 属性名写错时必须报错而不是返回空列表——「没有这个字段」和「没有匹配商品」是两回事，
+# 混成同一个响应会让调用方把自己的参数 bug 当成业务结论告诉用户，
+# 正好撞上 3.3.3 的「无匹配时如实告知，不编造商品」。
+# 新增属性维度时这里要一并加：漏加会立刻以 400 暴露出来，不会静默失效。
+_FILTERABLE_ATTR_KEYS = ("use_case", "style", "spec", "size", "color", "brand", "warranty")
+
 
 def _wrap(data):
     return ApiResponse(data=data)
@@ -78,13 +85,12 @@ def _build_json_path(key: str) -> str:
 def _parse_attr_filters(raw_filters: list[str]) -> list[tuple[str, str]]:
     """
     解析可重复的 attr 查询参数，形如 attr=use_case:办公。半角与全角冒号都接受。
-    格式不合法直接 400，不静默忽略——把过滤条件悄悄丢掉会让上层以为“筛过了”。
+    格式不合法、属性名不存在都直接 400，一律不静默忽略——把过滤条件悄悄丢掉
+    会让上层以为“筛过了”，把属性名打错的空结果当成“没有这样的商品”。
     """
     parsed: list[tuple[str, str]] = []
     for raw in raw_filters:
         item = raw.strip()
-        if not item:
-            continue
         positions = [index for index in (item.find(":"), item.find("：")) if index >= 0]
         separator_index = min(positions) if positions else -1
         key = item[:separator_index].strip() if separator_index > 0 else ""
@@ -93,6 +99,14 @@ def _parse_attr_filters(raw_filters: list[str]) -> list[tuple[str, str]]:
             raise HTTPException(
                 status_code=400,
                 detail=f"属性过滤条件 “{raw}” 格式不正确，正确格式为 “属性名:属性值”，例如 attr=use_case:办公。",
+            )
+        if key not in _FILTERABLE_ATTR_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"不支持按属性 “{key}” 过滤。可用的属性名为："
+                    f"{'、'.join(_FILTERABLE_ATTR_KEYS)}。"
+                ),
             )
         parsed.append((key, value))
     return parsed
@@ -306,7 +320,9 @@ def order_logistics(order_id: str, db: Session = Depends(get_db)):
         "按关键词、价格区间、商品属性和库存状态检索商品，返回分页后的候选商品列表与匹配总数，"
         "供上层按用户偏好做商品推荐。所有查询参数均可选；没有匹配商品时返回空列表且 total 为 0，不返回 404。\n\n"
         "attr 为可重复传入的属性过滤条件，格式 “属性名:属性值”（如 attr=use_case:办公&attr=style:极简）。"
-        "属性名需精确匹配 attributes_json 的 key，属性值为忽略大小写的模糊匹配，多个条件之间是「与」的关系。\n\n"
+        "可用的属性名为 use_case（用途）、style（风格）、spec（规格）、size（尺码）、color（颜色）、"
+        "brand（品牌）、warranty（保修），传其他属性名返回 400 而不是空列表。"
+        "属性值为忽略大小写的模糊匹配，多个条件之间是「与」的关系。\n\n"
         "库存状态每次实时读库，响应显式声明 Cache-Control: no-store，不做任何缓存。"
     ),
 )

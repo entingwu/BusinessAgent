@@ -118,7 +118,7 @@ INSERT INTO products (id, product_id, title, description, price, stock_status, c
 (16, 'p2016', '纯棉圆领 T 恤',
  '260g 精梳棉，双纱领口不易变形，肩线落肩 1cm，四季可穿。',
  99.00, '有货', 'https://picsum.photos/seed/p2016/400/400',
- '{"use_case": "居家", "style": "极简", "spec": "260g 精梳棉 / 圆领 / 常规版型", "size": "M", "color": "白", "brand": "素野", "warranty": "无"}',
+ '{"use_case": "居家", "style": "极简", "spec": "260g 精梳棉 / 圆领 / 常规版型", "size": "S", "color": "白", "brand": "素野", "warranty": "无"}',
  '2025-03-28 12:00:00')
 ON DUPLICATE KEY UPDATE
   title = VALUES(title), description = VALUES(description), price = VALUES(price),
@@ -156,7 +156,7 @@ ON DUPLICATE KEY UPDATE
   attributes_json = VALUES(attributes_json), created_at = VALUES(created_at);
 INSERT INTO products (id, product_id, title, description, price, stock_status, cover_url, attributes_json, created_at) VALUES
 (20, 'p2020', '316 不锈钢保温杯 500ml',
- '316 医用级不锈钢内胆，六小时保温 60℃ 以上，一键弹盖，杯口不烫嘴。',
+ '316 医用级不锈钢内胆，12 小时长效保温，六小时后杯内仍在 60℃ 以上，一键弹盖，杯口不烫嘴。',
  89.00, '有货', 'https://picsum.photos/seed/p2020/400/400',
  '{"use_case": "差旅", "style": "北欧", "spec": "500ml / 316 不锈钢 / 保温 12 小时 / 一键弹盖", "size": "小号", "color": "米白", "brand": "木言", "warranty": "一年"}',
  '2025-05-06 12:00:00')
