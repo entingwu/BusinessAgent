@@ -24,6 +24,7 @@ class KnowledgeChunk:
       source_title: 知识源名称 + 章节名，给人看的来源
       position: 片段在知识源内的序号
       score: 余弦相似度。业务接口类分片没有相似度，为 None，视为权威结果不参与阈值过滤
+      provider_id: 哪个 Provider 召回的，溯源落库时要按它区分来路
   """
   content: str
   chunk_id: str | None = None
@@ -32,6 +33,7 @@ class KnowledgeChunk:
   source_title: str | None = None
   position: int | None = None
   score: float | None = None
+  provider_id: str | None = None
 
   def citation(self) -> str:
     """
@@ -53,6 +55,7 @@ class KnowledgeChunk:
       "source_title": self.source_title,
       "position": self.position,
       "score": round(self.score, 4) if self.score is not None else None,
+      "provider_id": self.provider_id,
     }
 
 

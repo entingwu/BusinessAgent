@@ -5,6 +5,9 @@
 所以 KNOWLEDGE_CHUNK_SIZE / KNOWLEDGE_CHUNK_OVERLAP 两个配置项的单位是 token 而不是字符。
 
 FAQ 与 CSV 走 SPLIT_MODE_ENTRY：一条一片，不做语义切分——条目本身即语义单元。
+
+送进 Embedding 的文本不等于分片正文，拼法见 embedding_text()——那里的注释解释了
+为什么 FAQ 不能把标题拼进去，以及它和 KNOWLEDGE_SCORE_THRESHOLD 的绑定关系。
 """
 from dataclasses import dataclass, field
 from typing import Any
@@ -114,12 +117,30 @@ def embedding_text(chunk: PreparedChunk) -> str:
   """
   Goal: 送去向量化的文本。
 
-        entry 模式（FAQ / CSV）：正文里已经包含问题原文，再拼一次标题只是重复，
-        而且「常见问题：」这种共同前缀会给所有 FAQ 向量注入一个公共分量，
-        抬高任意短问句与 FAQ 的基线相似度，直接影响阈值可分性（校准实测）。
+  ⚠️ 改这个函数之前先读完下面这段，它直接决定 KNOWLEDGE_SCORE_THRESHOLD 还能不能用。
 
-        semantic 模式（文档）：正文开头已带章节名，这里再补一个知识源名称
-        （「退货政策」「配送政策」），让文档主题这一层语境参与匹配。
+  entry 模式（FAQ / CSV）：**只 embed 正文，绝对不要把 chunk.title 拼进来。**
+    title 形如「常见问题：退货运费谁出？」，问题原文在正文里已经有一遍，拼上去是重复；
+    真正的问题是「常见问题：」这个共同前缀会给所有 FAQ 向量注入一个公共分量，
+    把任意短问句与 FAQ 的基线相似度整体抬高，可分区间当场被挤没。
+
+  semantic 模式（文档）：正文开头已带章节名，这里再补一个知识源名称
+    （「退货政策」「配送政策」），让文档主题这一层语境参与匹配。
+
+  校准实测（34 条样本，见 knowledge_eval/calibration_set.jsonl，
+  用 `python -m business_agent.knowledge.ingest calibrate` 复现）：
+
+    | 方案                       | 有答案最低分 | 无答案最高分（剔除离群点后） |
+    |----------------------------|-------------|------------------------------|
+    | 标题+正文（曾经的写法）      | 0.5858      | 0.5518                        |
+    | 仅正文                      | 0.5773      | 0.5605                        |
+    | 知识源名+正文（当前，混合）  | 0.6030      | 0.5605                        |
+
+  当前方案的可分区间是 (0.5605, 0.6030)，取中点得到 KNOWLEDGE_SCORE_THRESHOLD=0.58。
+  改回「标题+正文」会把区间压到 (0.5518, 0.5858)，0.58 直接落到有答案那批里边，
+  一批本该答上来的问题会开始走兜底。
+
+  所以：**动了这个函数就必须重跑 calibrate 并重新定阈值**，两件事是绑在一起的。
 
   Args:
       chunk

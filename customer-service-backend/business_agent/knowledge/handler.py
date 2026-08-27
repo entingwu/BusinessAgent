@@ -38,13 +38,14 @@ class KnowledgeHandler:
             # 向量库或 Embedding 服务不可用：直接降级为「暂时查不了，帮你转人工」，
             # 绝不允许继续往下走、让 LLM 用自身知识把答案编出来（规范 5.1 / C.4.7）
             logger.warning("knowledge_provider_unavailable provider_id=%s error=%s", provider_id, error)
-            return await self.knowledge_responder.respond_unavailable(state)
+            return await self.knowledge_responder.respond_unavailable(
+                state, provider_ids=provider_ids, error=f"{provider_id}: {error}")
 
         chunks.extend(chunk)
 
     # 4. 将从所有提供者查询获取到的结果给responder组件用
     #    responder 负责排序、Top-K、上下文截断与未命中兜底
-    messages = await self.knowledge_responder.respond(chunks, state)
+    messages = await self.knowledge_responder.respond(chunks, state, provider_ids=provider_ids)
     # 5. 封装数据结果返回
     return messages
 

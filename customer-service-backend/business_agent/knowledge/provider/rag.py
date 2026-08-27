@@ -39,13 +39,15 @@ class KnowledgeRetriever:
                      query_text: str,
                      source_types: tuple[str, ...] | list[str] | None = None,
                      top_k: int | None = None,
-                     score_threshold: float | None = None) -> list[KnowledgeChunk]:
+                     score_threshold: float | None = None,
+                     provider_id: str | None = None) -> list[KnowledgeChunk]:
     """
     Goal: 向量检索 Top-K，按阈值过滤，返回带来源标识与相似度的分片
     Args:
         query_text: 用户提问
         source_types: metadata 过滤，例如 ("faq",)；None 表示不过滤
         top_k / score_threshold: 覆盖默认参数（阈值校准时用）
+        provider_id: 调用方的 Provider ID，打在分片上供溯源落库区分来路
     Returns: list[KnowledgeChunk] 按相似度从高到低；未命中返回空列表
     Raises: KnowledgeUnavailableError 检索链路不可用时抛出，由上层降级
     """
@@ -69,24 +71,33 @@ class KnowledgeRetriever:
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
       raise KnowledgeUnavailableError(str(error)) from error
 
-    chunks = [_to_chunk(match) for match in matches if match.score >= effective_threshold]
+    chunks = [_to_chunk(match, provider_id) for match in matches if match.score >= effective_threshold]
     chunks.sort(key=lambda chunk: chunk.score or 0.0, reverse=True)
+
+    # 被阈值挡掉的候选也打进日志：未命中那一轮「差多少才够阈值」是调阈值时最有用的一条信息。
+    # 这部分不落 retrieval_traces 表（表只记进入过 responder 的分片），日志是它唯一的去处。
+    rejected = [
+      {"chunk_id": match.id, "score": round(match.score, 4)}
+      for match in matches if match.score < effective_threshold
+    ]
 
     # 内部记录命中的分片 ID 与相似度，回复可溯源（规范 5.2 / 5.3）
     logger.info(
-      "knowledge_retrieval query=%r filters=%s top_k=%s threshold=%s hits=%s dropped=%s traces=%s",
+      "knowledge_retrieval query=%r filters=%s top_k=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
       query_text, filters, effective_top_k, effective_threshold,
-      len(chunks), len(matches) - len(chunks),
+      len(chunks), len(rejected),
       [chunk.trace() for chunk in chunks],
+      rejected,
     )
     return chunks
 
 
-def _to_chunk(match: VectorMatch) -> KnowledgeChunk:
+def _to_chunk(match: VectorMatch, provider_id: str | None = None) -> KnowledgeChunk:
   """
   Goal: VectorMatch -> KnowledgeChunk，向量库的结构到此为止
   Args:
       match
+      provider_id: 召回它的 Provider ID
   Returns: KnowledgeChunk
   """
   metadata = match.metadata or {}
@@ -98,6 +109,7 @@ def _to_chunk(match: VectorMatch) -> KnowledgeChunk:
     source_title=str(metadata.get("title")) if metadata.get("title") else metadata.get("source_name"),
     position=int(metadata["position"]) if metadata.get("position") is not None else None,
     score=match.score,
+    provider_id=provider_id,
   )
 
 
@@ -120,7 +132,9 @@ class VectorKnowledgeProvider(Provider):
     Raises: KnowledgeUnavailableError
     """
     query_text = self._build_query_text(state)
-    return await self._retriever.retrieve(query_text, source_types=self.source_types)
+    # provider_id 一并传下去，分片带着来路回来，responder 落溯源记录时按它区分
+    return await self._retriever.retrieve(
+      query_text, source_types=self.source_types, provider_id=self.provider_id)
 
   @staticmethod
   def _build_query_text(state: DialogueState) -> str:

@@ -57,6 +57,7 @@ class ApiOrderProvider(Provider):
             source_type=SOURCE_TYPE_API,
             source_title=f"订单接口 {order_number}",
             position=0,
+            provider_id="api.order",
         )
     ]
 
@@ -92,6 +93,7 @@ class ApiProductProvider(Provider):
         source_type=SOURCE_TYPE_API,
         source_title=f"商品接口 {product_id}",
         position=0,
+        provider_id="api.product",
     )]
 
   async def _get_product_info_by_id(self, product_id: str) -> dict[str, Any]:
