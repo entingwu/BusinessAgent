@@ -6,6 +6,7 @@ from business_agent.domain.state import DialogueState
 from business_agent.task.action.runner import ActionCall
 from business_agent.task.flows.flows import FlowList
 from business_agent.task.flows.links import FlowStepConditionLink, FlowStepFallbackLink, FlowStepStaticLink
+from business_agent.task.flows.slot_guard import accept_slots
 from business_agent.task.flows.steps import ActionFlowStep, CollectionFlowStep, EndFlowStep, FlowStep, StartFlowStep
 
 
@@ -108,7 +109,7 @@ class FlowExecutor:
     elif isinstance(step, ActionFlowStep):
       return self._run_action_step(step, state)
     elif isinstance(step, CollectionFlowStep):
-      return self._run_collection_step(step, state)
+      return self._run_collection_step(step, state, flow_list)
     else:
       return None
 
@@ -207,7 +208,8 @@ class FlowExecutor:
 
   def _run_collection_step(self, 
                            step: CollectionFlowStep, 
-                           state: DialogueState) -> ActionCall | None:
+                           state: DialogueState,
+                           flow_list: FlowList) -> ActionCall | None:
     """
     Goal: 让用户填写业务流程缺少的槽位信息。
     特点1：
@@ -224,7 +226,7 @@ class FlowExecutor:
         state:
     Returns
     """
-    self._try_set_slots_from_object(step, state)
+    self._try_set_slots_from_object(step, state, flow_list)
 
     if state.active_task.slots.get(step.slot_name):
       # 第二次： 校验用户填写的槽位信息
@@ -259,7 +261,8 @@ class FlowExecutor:
 
   def _try_set_slots_from_object(self, 
                                  step: CollectionFlowStep, 
-                                 state: DialogueState):
+                                 state: DialogueState,
+                                 flow_list: FlowList):
     # 1. 判断当前业务流程以及卡片对象是否有
     if state.active_task is None or state.focused_object is None:
       return
@@ -274,7 +277,12 @@ class FlowExecutor:
 
     # 4. 判断当前这一步缺失的槽位是否等于期望的槽位, 且当前业务流程上下文中槽位还没有，才利用前面点击过的卡片。
     if step.slot_name == expected_slots and not state.active_task.slots.get(step.slot_name):
-      state.set_slots({step.slot_name: state.focused_object.id})
+      # 卡片带来的 id 同样要过槽位守卫：卡片可能携带与其类型不符的 id，
+      # 而这条路径不经过 CommandProcessor，是槽位写入的第二个入口，漏了这里等于没修。
+      flow = flow_list.get_flow_by_flow_id(state.active_task.flow_id)
+      accepted = accept_slots(flow, {step.slot_name: state.focused_object.id}, source="卡片回填")
+      if accepted:
+        state.set_slots(accepted)
 
 
 if __name__ == '__main__':

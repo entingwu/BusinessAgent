@@ -58,7 +58,9 @@ class TurnPlanner:
                                             ensure_ascii=False)
 
     # 4. 清单相关
-    available_flows = [{k:v for k, v in asdict(flow_object).items() if k != "steps"} for flow_object in flow_list.flows if not flow_object.id.startswith("system_")]
+    available_flows = [self._serialize_flow(flow_object)
+                       for flow_object in flow_list.flows
+                       if not flow_object.id.startswith("system_")]
 
     available_flows_json = json.dumps({"flows" : available_flows}, ensure_ascii=False)
     knowledge_intents = [{"id": id, "description": intent.description} for id, intent in knowledge_intents.items()]
@@ -73,6 +75,25 @@ class TurnPlanner:
       "knowledge_intents_json": knowledge_intents_json,
       "available_flows_json": available_flows_json,
     }
+
+  def _serialize_flow(self, flow_object) -> dict[str, Any]:
+    """
+    Goal: 把 Flow 序列化成提示词里的可用流程清单项
+    去掉 steps：对路由决策没用，而且很长。
+    去掉值为 None 的 pattern：槽位的格式约束进提示词是有意的——把约束摆给 LLM 看，
+    能减少它生成格式不对的槽位值；但没配 pattern 的槽位会带出一串 "pattern": null，
+    那是纯噪声，占提示词篇幅还容易让模型以为「null」有含义。
+    Args:
+        flow_object: 一个 Flow
+    Returns:
+        用于序列化进提示词的字典
+    """
+    flow_dict = {k: v for k, v in asdict(flow_object).items() if k != "steps"}
+    flow_dict["slots"] = {
+      slot_name: {k: v for k, v in slot_dict.items() if not (k == "pattern" and v is None)}
+      for slot_name, slot_dict in (flow_dict.get("slots") or {}).items()
+    }
+    return flow_dict
 
   async def _invoke(self, prompt_inputs: dict[str, Any]) -> TurnPlan:
     """

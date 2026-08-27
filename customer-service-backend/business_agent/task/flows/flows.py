@@ -7,6 +7,7 @@ class FlowSlot:
   type: str
   label: str
   description: str
+  pattern: str | None = None   # 槽位值的格式约束（正则），None 表示不约束
 
 
 @dataclass(slots=True)

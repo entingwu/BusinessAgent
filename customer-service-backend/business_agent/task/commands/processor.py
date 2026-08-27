@@ -2,6 +2,7 @@ from business_agent.domain.contexts import SystemTaskCancelFailedContext, System
 from business_agent.domain.state import DialogueState
 from business_agent.task.commands.command import CancelFlowCommand, Command, ResumeFlowCommand, SetSlotsCommand, StartFlowCommand
 from business_agent.task.flows.flows import FlowList
+from business_agent.task.flows.slot_guard import accept_slots
 
 
 class CommandProcessor:
@@ -23,7 +24,7 @@ class CommandProcessor:
       if isinstance(command, StartFlowCommand):
         self._start_flow(command, dialogue_state, flow_list)
       elif isinstance(command, SetSlotsCommand):
-        self._update_slots(command, dialogue_state)
+        self._update_slots(command, dialogue_state, flow_list)
       elif isinstance(command, ResumeFlowCommand):
         self._resumed_flow(command, dialogue_state, flow_list)
       elif isinstance(command, CancelFlowCommand):
@@ -98,12 +99,34 @@ class CommandProcessor:
 
   def _update_slots(self, 
                     command: SetSlotsCommand, 
-                    state: DialogueState):
+                    state: DialogueState,
+                    flow_list: FlowList):
     """
     Goal: 给业务流程缺失的槽位补全信息。 代码逻辑: 修改状态
     修改state中activated_task的slots属性[将传入过来的槽位信息[槽位名:槽位值] 放到业务流程的slots中]
+
+    写入前先过两道关。槽位值来自 LLM 抽取，而 LLM 会把上一轮的实体顺手填进
+    这一轮的槽位——实测「查订单 o30002 的物流」之后紧接着问「看看类似的商品推荐」，
+    订单号 o30002 会被填进 product_id，推荐流程于是拿着一个订单号去查商品。
+    提示词里写「禁止臆造」只是口头约束，拦不住，所以在写入状态这一步挡：
+
+    1. 槽位名必须属于当前流程声明的槽位（Flow.slots 由 collect 步骤推导而来）；
+    2. 槽位若配了 pattern，值必须匹配，否则丢弃。
+
+    丢弃而不是整轮拒绝：用户的意图（start_flow）本身是对的，错的只是被顺手带上的
+    槽位值。丢掉之后 collect 步骤会正常向用户要，这比让整轮走澄清体验好。
+    丢弃一律留日志，不静默。
+    Args:
+        command: 待写入的槽位命令
+        state: 当前对话状态
+        flow_list: 用于取出当前流程的槽位声明
     """
-    state.set_slots(command.slots)  # 最简单
+    task_context = state.active_task
+    flow = flow_list.get_flow_by_flow_id(task_context.flow_id) if task_context is not None else None
+    accepted = accept_slots(flow, command.slots, source="set_slots 命令")
+    if accepted:
+      state.set_slots(accepted)
+
 
   def _resumed_flow(self, 
                     command: ResumeFlowCommand, 

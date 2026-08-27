@@ -50,7 +50,8 @@ class FlowLoader:
             slot_name=slot_name,
             type=slot_dict['type'],
             label=slot_dict['label'],
-            description=slot_dict['description']
+            description=slot_dict['description'],
+            pattern=slot_dict.get('pattern')
         )
     return loaded_slots
 

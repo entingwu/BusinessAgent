@@ -3,6 +3,9 @@ slots:
     type: text
     label: 订单号
     description: 用户的订单号
+    # 这里刻意不加 pattern：中台种子数据是 o3000x，但订单号的真实形态并不固定
+    # （提示词里的示例就是 A20260408001 这种），约束写窄了会把合法订单号挡在门外。
+    # 反向的串台（商品号填进订单号）由 product_id 的 pattern 与流程槽位白名单一起拦。
 
   order_status:
     type: text
@@ -38,6 +41,16 @@ slots:
     type: text
     label: 商品ID
     description: 当前咨询商品的唯一标识
+    # 中台的商品编号统一是 p + 数字（p2001…p2024）。这条约束的来历：LLM 会把上一轮的
+    # 订单号顺手填进来——实测「查订单 o30002 的物流」之后紧接着问「看看类似的商品推荐」，
+    # o30002 会进 product_id，当时的 similar_product_recommendation 流程就拿着订单号去查商品。
+    #
+    # 该流程已被 product_recommendation（偏好收集式）取代，**目前没有任何流程把 product_id
+    # 作为 collect 步骤收集**，所以这条 pattern 当前不会被用到——槽位名白名单那一关就已经
+    # 把它挡在所有流程之外了。保留它是因为 product_id 仍是卡片回填的映射目标
+    # （executor.py 的 expected_slots_mapping、dialogue_engine.py 的卡片分支），
+    # 一旦哪个流程重新收集它，这条约束立即生效，不必再踩一遍同样的坑。
+    pattern: "(?i)p\\d{3,}"
 
   product_use_case:
     type: text
