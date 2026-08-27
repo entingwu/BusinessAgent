@@ -59,3 +59,25 @@ class ChatHistoryResponse(BaseModel):
   sender_id: str
   control_owner: ControlOwner = "AGENT"
   messages: list[ChatHistoryMessage]
+
+class SessionStateResponse(BaseModel):
+  """
+  会话状态查询（规范 4.2）。给前端显示控制权归属，也给第二档的商家接管台用。
+  """
+  sender_id: str
+  control_owner: ControlOwner = "AGENT"
+  handoff_trigger: str | None = None
+  handoff_reason: str = ""
+  active_flow: str | None = None
+  active_step: str | None = None
+  slots: dict[str, Any] = Field(default_factory=dict)
+
+
+class HandoffRequest(BaseModel):
+  """
+  坐席接管 / 回交。第一档只做控制权翻转；
+  移交包（完整历史 + 已调用工具及返回结果）是第二档。
+  """
+  sender_id: str
+  action: Literal["claim", "release"]
+  reason: str = ""

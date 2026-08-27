@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from business_agent.domain.contexts import SystemContext, TaskContext
+from business_agent.handoff.control import ControlOwner, HandoffTrigger
 from business_agent.domain.messages import FocusedObject, UserMessage, BotMessage
 
 @dataclass(slots=True)
@@ -79,6 +80,13 @@ class DialogueState:
   focused_object:FocusedObject | None = None                           # Card info
   pending_turn: Turn | None = None
 
+  # ---- 人工接管（规范 3.3.4 第一档）----
+  control_owner: ControlOwner = ControlOwner.AGENT                     # 会话控制权归属
+  handoff_trigger: HandoffTrigger | None = None                        # 转人工的原因，供第二档移交包用
+  handoff_reason: str = ""                                             # 原因的可读说明
+  consecutive_clarify: int = 0                                         # 连续澄清失败计数
+  consecutive_knowledge_miss: int = 0                                  # 连续知识检索未命中计数
+
   def to_dict(self) -> dict[str, Any]:
     return {
       "sender_id": self.sender_id,
@@ -89,7 +97,12 @@ class DialogueState:
       "focused_object": FocusedObject.to_dict(self.focused_object) if self.focused_object is not None else None,
       "sessions": [Session.to_dict(session) for session in self.sessions],
       "current_session_id": self.current_session_id,
-      "pending_turn": Turn.to_dict(self.pending_turn) if self.pending_turn is not None else None
+      "pending_turn": Turn.to_dict(self.pending_turn) if self.pending_turn is not None else None,
+      "control_owner": self.control_owner.value,
+      "handoff_trigger": self.handoff_trigger.value if self.handoff_trigger is not None else None,
+      "handoff_reason": self.handoff_reason,
+      "consecutive_clarify": self.consecutive_clarify,
+      "consecutive_knowledge_miss": self.consecutive_knowledge_miss,
     }
 
   @classmethod
@@ -102,7 +115,13 @@ class DialogueState:
       focused_object=FocusedObject.from_dict(data['focused_object']) if data['focused_object'] is not None else None,
       sessions=[Session.from_dict(session_dict) for session_dict in data['sessions']],
       current_session_id=data['current_session_id'],
-      pending_turn=Turn.from_dict(data['pending_turn']) if data['pending_turn'] is not None else None
+      pending_turn=Turn.from_dict(data['pending_turn']) if data['pending_turn'] is not None else None,
+      # 加字段前落库的状态没有这几个键，用 .get 兜住，否则老会话一读就 KeyError
+      control_owner=ControlOwner.coerce(data.get('control_owner')),
+      handoff_trigger=HandoffTrigger(data['handoff_trigger']) if data.get('handoff_trigger') else None,
+      handoff_reason=data.get('handoff_reason') or "",
+      consecutive_clarify=data.get('consecutive_clarify') or 0,
+      consecutive_knowledge_miss=data.get('consecutive_knowledge_miss') or 0,
     )
 
 ########################################### Task related methods ###########################################
@@ -260,6 +279,15 @@ class DialogueState:
     # 3. buffer 
     self.pending_turn = None
 
+    # 4. 控制权：新会话一律从 Agent 重新开始。
+    #    上一通会话的人工接管状态不该跨会话粘住——隔了一小时再来的
+    #    是一次新咨询，不是上次那位坐席还在接着
+    self.control_owner = ControlOwner.AGENT
+    self.handoff_trigger = None
+    self.handoff_reason = ""
+    self.consecutive_clarify = 0
+    self.consecutive_knowledge_miss = 0
+
 ########################################### Turn related methods ###########################################
   
   def begin_turn(self, user_message: UserMessage):
@@ -288,6 +316,57 @@ class DialogueState:
 
   def set_focused_object(self, object: FocusedObject):
         self.focused_object = object
+
+########################################### Handoff related methods ###########################################
+
+  def request_handoff(self, trigger: HandoffTrigger, reason: str):
+    """
+    Goal: 转入排队等人工。Agent 在 PENDING_HUMAN 下仍然应答——
+          坐席可能几分钟才接进来，这期间把用户晾着比继续兜底更糟
+    """
+    # 已经是人工在处理了就别往回退，否则坐席接手后用户再说句「投诉」会把状态打回排队
+    if self.control_owner is ControlOwner.HUMAN:
+      return
+    self.control_owner = ControlOwner.PENDING_HUMAN
+    self.handoff_trigger = trigger
+    self.handoff_reason = reason
+
+  def claim_by_human(self, reason: str = ""):
+    """
+    Goal: 坐席接管。此后 Agent 不再自动应答
+    """
+    self.control_owner = ControlOwner.HUMAN
+    if self.handoff_trigger is None:
+      self.handoff_trigger = HandoffTrigger.MANUAL
+    if reason:
+      self.handoff_reason = reason
+
+  def release_to_agent(self):
+    """
+    Goal: 交还给 Agent。计数器一并清零，否则刚回交就会因为
+          之前累积的失败次数立刻又被踢回人工
+    """
+    self.control_owner = ControlOwner.AGENT
+    self.handoff_trigger = None
+    self.handoff_reason = ""
+    self.consecutive_clarify = 0
+    self.consecutive_knowledge_miss = 0
+
+  def is_human_controlled(self) -> bool:
+    return self.control_owner is ControlOwner.HUMAN
+
+  def note_clarify(self, happened: bool):
+    """
+    Goal: 记一次澄清结果。成功识别意图就清零——连续性是这个信号的全部意义，
+          累计总数说明不了 Agent 现在处理不了
+    """
+    self.consecutive_clarify = self.consecutive_clarify + 1 if happened else 0
+
+  def note_knowledge_miss(self, missed: bool):
+    """
+    Goal: 记一次知识检索命中与否。语义同 note_clarify
+    """
+    self.consecutive_knowledge_miss = self.consecutive_knowledge_miss + 1 if missed else 0
 
 
 if __name__ == '__main__':

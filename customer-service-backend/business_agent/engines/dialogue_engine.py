@@ -9,6 +9,7 @@ from business_agent.chitchat.handler import ChitChatHandler
 from business_agent.clarify.responder import ClarifyResponder
 from business_agent.domain.messages import BotMessage, FocusedObject, MessageType, ProcessedResult, UserMessage
 from business_agent.domain.state import DialogueState
+from business_agent.handoff import control as handoff_control
 from business_agent.knowledge.handler import KnowledgeHandler
 from business_agent.plan.planner import TurnPlanner
 from business_agent.plan.turn_plan import ClarifyReason, TurnPlan
@@ -49,26 +50,77 @@ class DialogueEngine:
     # 2. start turn
     self._start_turn(user_message, dialogue_state)
 
-    # 3. Spliting Message (text, object)
-    # 3.1 Text message
+    # 3. 停答门闸（规范 3.3.4 第一档：HUMAN 状态下 Agent 不再自动应答）。
+    #    消息照常入库——坐席要看到用户在这期间说了什么——但不进规划、不调 LLM。
+    #    放在最前面是有意的：一旦人工接管，连意图识别都不该跑
+    if dialogue_state.is_human_controlled():
+      return self._commit(user_message, dialogue_state, bot_messages=[])
+
+    # 4. Spliting Message (text, object)
+    # 4.1 Text message
     if user_message.type is MessageType.TEXT:
       bot_messages = await self._handle_text_message(dialogue_state)
 
-    # 3.2 object message
+    # 4.2 object message
     else:
       # a) Save clicked card save to dialog state
       dialogue_state.focused_object = user_message.object
       # b) Process object message
-      bot_messages = await self._handle_object_message(user_message.object, 
-                                                       dialogue_state, 
+      bot_messages = await self._handle_object_message(user_message.object,
+                                                       dialogue_state,
                                                        self.task_handler.flow_list)
 
-    # 4. Submit
-    dialogue_state.pending_turn.bot_messages = bot_messages
-    dialogue_state.commit_pending_turn()
+    # 5. 接管判定：本轮处理完再判，这样「连续失败」的计数已经反映了这一轮
+    bot_messages = self._apply_handoff_policy(user_message, dialogue_state, bot_messages)
 
-    # 5. Return bot message
-    return ProcessedResult(message_id=user_message.message_id, messages=bot_messages)
+    # 6. Submit
+    return self._commit(user_message, dialogue_state, bot_messages)
+
+  def _commit(self,
+              user_message: UserMessage,
+              state: DialogueState,
+              bot_messages: list[BotMessage]) -> ProcessedResult:
+    """
+    Goal: 落 turn 并封装返回。control_owner 是会话级的，从 state 取，
+          不是每条消息各自带一份（附录 E.2 第 3 条）
+    """
+    state.pending_turn.bot_messages = bot_messages
+    state.commit_pending_turn()
+    return ProcessedResult(
+      message_id=user_message.message_id,
+      messages=bot_messages,
+      control_owner=state.control_owner.value,
+    )
+
+  def _apply_handoff_policy(self,
+                            user_message: UserMessage,
+                            state: DialogueState,
+                            bot_messages: list[BotMessage]) -> list[BotMessage]:
+    """
+    Goal: 判断本轮是否触发转人工；触发则切 PENDING_HUMAN 并追加一句提示
+    Args:
+        user_message: 本轮用户消息，卡片消息没有文本
+        state:
+        bot_messages: 本轮已经产生的回复
+    Returns:
+        可能追加了提示的回复列表
+    """
+    decision = handoff_control.evaluate(
+      text=user_message.text,
+      consecutive_clarify=state.consecutive_clarify,
+      consecutive_knowledge_miss=state.consecutive_knowledge_miss,
+    )
+    if not decision.needed:
+      return bot_messages
+
+    # 已经在排队了就不再重复提示，否则用户每说一句都收到一遍「正在转接」
+    already_pending = state.control_owner is handoff_control.ControlOwner.PENDING_HUMAN
+    state.request_handoff(decision.trigger, decision.reason)
+    if already_pending:
+      return bot_messages
+
+    notice = handoff_control.PENDING_NOTICE.get(decision.trigger)
+    return [*bot_messages, BotMessage(text=notice)] if notice else bot_messages
 
   def _prepare_session(self, state: DialogueState):
     """
@@ -120,7 +172,12 @@ class DialogueEngine:
 
     # 3. Process validated failure
     if not validated.valid:
+      # 连续澄清失败是「Agent 处理不了」的信号，累计到阈值触发转人工
+      dialogue_state.note_clarify(happened=True)
       return await self.clarify_responder.respond(validated.reason, dialogue_state)
+
+    # 识别成功，连续失败计数清零
+    dialogue_state.note_clarify(happened=False)
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:

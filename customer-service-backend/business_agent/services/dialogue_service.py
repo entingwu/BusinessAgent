@@ -2,6 +2,7 @@ from business_agent.domain.messages import ChatHistoryMessage, UserMessage, Proc
 from business_agent.engines.dialogue_engine import DialogueEngine
 from business_agent.repository.dialogue_repository import DialogueRepository
 from business_agent.chat_history.builder import ChatHistoryBuilder
+from business_agent.domain.state import DialogueState
 
 
 class DialogueStateService:
@@ -60,4 +61,24 @@ class DialogueStateService:
                     final_chat_history_messages.append(bot_chat_history_message)
 
         return final_chat_history_messages
-    
+
+  async def get_session_state(self, sender_id: str) -> DialogueState:
+      """
+      Goal: 读当前会话状态（规范 4.2：当前流程、步骤、槽位、控制权归属）。
+            只读，不经过引擎，也不落库
+      """
+      return await self._repository.load_state(sender_id)
+
+  async def set_control_owner(self, sender_id: str, action: str, reason: str) -> DialogueState:
+      """
+      Goal: 坐席接管或回交。第一档只翻转控制权
+      Args:
+          action: "claim" 坐席接管 / "release" 交还 Agent
+      """
+      state = await self._repository.load_state(sender_id)
+      if action == "claim":
+          state.claim_by_human(reason)
+      else:
+          state.release_to_agent()
+      await self._repository.save_state(sender_id, state)
+      return state

@@ -7,7 +7,8 @@ import uuid
 from fastapi import APIRouter
 
 from business_agent.api.dependencies import DialogueStateServiceDep
-from business_agent.api.schemas import ChatHistoryResponse, ChatRequest, ChatResponse, ChatBotMessage, ChatObject
+from business_agent.api.schemas import (ChatHistoryResponse, ChatRequest, ChatResponse, ChatBotMessage,
+                                        ChatObject, HandoffRequest, SessionStateResponse)
 from business_agent.domain.messages import UserMessage, ProcessedResult, MessageType, FocusedObject
 
 router = APIRouter()
@@ -103,4 +104,40 @@ async def chat_history_endpoint(sender_id: str,
                                 service: DialogueStateServiceDep):
    chat_history_messages = await service.get_chat_history(sender_id)
 
-   return ChatHistoryResponse(sender_id=sender_id, messages=chat_history_messages)
+   state = await service.get_session_state(sender_id)
+   return ChatHistoryResponse(sender_id=sender_id,
+                              control_owner=state.control_owner.value,
+                              messages=chat_history_messages)
+
+
+def _build_session_state_response(sender_id: str, state) -> SessionStateResponse:
+    """
+    Goal: 领域状态转 API 模型。当前流程可能是业务流程，也可能是系统流程
+    """
+    task = state.current_task()
+    return SessionStateResponse(
+        sender_id=sender_id,
+        control_owner=state.control_owner.value,
+        handoff_trigger=state.handoff_trigger.value if state.handoff_trigger is not None else None,
+        handoff_reason=state.handoff_reason,
+        active_flow=task.flow_id if task is not None else None,
+        active_step=task.step_id if task is not None else None,
+        slots=dict(state.active_task.slots) if state.active_task is not None else {},
+    )
+
+
+@router.get("/api/session/state", response_model=SessionStateResponse)
+async def session_state_endpoint(sender_id: str, service: DialogueStateServiceDep):
+    """当前流程、步骤、槽位与控制权归属（规范 4.2）"""
+    state = await service.get_session_state(sender_id)
+    return _build_session_state_response(sender_id, state)
+
+
+@router.post("/api/handoff", response_model=SessionStateResponse)
+async def handoff_endpoint(body: HandoffRequest, service: DialogueStateServiceDep):
+    """
+    坐席接管（claim）或交还 Agent（release）。
+    第一档只翻转控制权；移交包属于第二档。
+    """
+    state = await service.set_control_owner(body.sender_id, body.action, body.reason)
+    return _build_session_state_response(body.sender_id, state)
