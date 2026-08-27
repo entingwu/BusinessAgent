@@ -54,6 +54,15 @@ curl http://127.0.0.1:18081/health
 curl http://127.0.0.1:18081/users/u1001/orders
 ```
 
+The init scripts run **only when the volume is first created**, so pulling new code leaves an existing database untouched. Seed changes ship as incremental scripts in [`docker/mysql/migrations/`](ecommerce-service-backend/docker/mysql/migrations/) and have to be applied by hand:
+
+```bash
+docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set=utf8mb4 commerce \
+  < docker/mysql/migrations/2026-08-27-unify-product-attributes.sql
+```
+
+They are idempotent and there is no version table, so when in doubt, re-run. Rebuilding the API after a code change needs `docker compose -p ecommerce up -d --build backend` — a plain `restart` keeps serving the old image. Never use `down -v`: it destroys the `custom_service` database, which no script recreates.
+
 The dialogue backend additionally needs a `custom_service` database on that same MySQL instance for its own `dialogue_states` table.
 
 ### 2. Dialogue backend
@@ -224,8 +233,9 @@ ecommerce-service-backend/
 │   ├── models.py       SQLAlchemy ORM models
 │   ├── schemas.py      Pydantic response models
 │   └── database.py     Sync engine + session factory
-├── docker/mysql/init/  Schema + seed SQL, run once on first volume init
-└── docker-compose.yml  MySQL 8 + the service itself
+├── docker/mysql/init/        Schema + seed SQL, run once on first volume init
+├── docker/mysql/migrations/  Incremental SQL for databases that already exist — apply by hand
+└── docker-compose.yml        MySQL 8 + the service itself
 ```
 
 Prompt templates live in `business_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.

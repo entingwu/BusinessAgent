@@ -30,6 +30,21 @@ docker compose -p ecommerce ps        # wait for mysql to report "healthy"
 
 Always pass `-p ecommerce`. The Compose project name defaults to the directory name and the named volume derives from it — a different project name silently creates a **fresh empty database** instead of reusing the seeded one.
 
+**`docker/mysql/init/` only runs once, on first volume init.** Pulling new code does not update an existing database. If the volume already exists, apply the incremental scripts in `docker/mysql/migrations/` by hand — they are the only way seed changes reach a running database:
+
+```bash
+# ecommerce-service-backend/
+docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set=utf8mb4 commerce \
+  < docker/mysql/migrations/2026-08-27-unify-product-attributes.sql
+```
+
+There is **no version table** — nothing records which migrations have run. Every script is written to be idempotent (`UPDATE` for existing rows, `INSERT ... ON DUPLICATE KEY UPDATE` for new ones), so re-running one is safe; that is the only defence. Check the data itself to tell whether a script has been applied.
+
+Two traps around this:
+
+- **Never `docker compose down -v`.** The init scripts only `USE commerce` — they have never created `custom_service`, which holds `dialogue_states` plus the RAG tables. Wiping the volume rebuilds `commerce` and destroys `custom_service` with nothing to recreate it.
+- **`docker compose restart backend` loads the old code.** `Dockerfile.local` is `COPY . .` with no bind mount, so code changes need `docker compose -p ecommerce up -d --build backend`. This fails quietly in a nasty way: FastAPI silently ignores query parameters it does not declare, so an old image answers `GET /products?attr=use_case:办公` with `200` and **every** product rather than an error — the filter looks like it worked.
+
 ```bash
 # customer-service-backend/
 uv sync
@@ -103,7 +118,7 @@ Understanding one user message requires reading across `api/` → `services/` �
 
 The **entire** `DialogueState` — sessions, turns, user and bot messages, task stack, slots — is serialized to a single `state_json` TEXT column in `dialogue_states`, keyed by `sender_id` (`repository/dialogue_record.py`). There is no message table. The spec's 第一档 calls for splitting messages out and adding a `control_owner` field for human handoff; expect this shape to change.
 
-Two databases live on the one MySQL container: `commerce` (e-commerce service, seeded from `docker/mysql/init/`) and `custom_service` (dialogue backend's `dialogue_states`).
+Two databases live on the one MySQL container: `commerce` (e-commerce service, seeded from `docker/mysql/init/`, updated afterwards only through `docker/mysql/migrations/`) and `custom_service` (dialogue backend's `dialogue_states`) — the latter is **not** created by any script in the repo.
 
 ## Known stubs and gaps
 
