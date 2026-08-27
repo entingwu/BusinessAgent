@@ -68,18 +68,32 @@ def _build_user_message(chat_request: ChatRequest) -> UserMessage:
     )
 
 
+def _to_chat_object(focused_object: FocusedObject) -> ChatObject:
+    """
+    Goal: 领域模型的业务对象转成 API 模型。object 与 cards 两条路径共用，避免写两份转换
+    """
+    return ChatObject(
+        id=focused_object.id,
+        type=focused_object.type,
+        title=focused_object.title,
+        attributes=focused_object.attributes,
+    )
+
+
 def _build_chat_response(process_result: ProcessedResult) -> ChatResponse:
+    """
+    Goal: 领域模型转 API 模型。协议见 meta-business-agent.md 附录 E
+    """
     return ChatResponse(
         message_id=process_result.message_id,
+        control_owner=process_result.control_owner,
         messages=[
-            ChatBotMessage(text=bot_message.text,
-                           object=ChatObject(
-                               id=bot_message.object.id,
-                               type=bot_message.object.type,
-                               title=bot_message.object.title,
-                               attributes=bot_message.object.attributes
-                           ) if bot_message.object is not None else None
-                           )
+            ChatBotMessage(
+                text=bot_message.text,
+                object=_to_chat_object(bot_message.object) if bot_message.object is not None else None,
+                cards=[_to_chat_object(card) for card in bot_message.cards],
+                suggestions=list(bot_message.suggestions),
+            )
             for bot_message in process_result.messages
         ]
     )

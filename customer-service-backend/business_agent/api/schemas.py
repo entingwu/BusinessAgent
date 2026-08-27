@@ -2,8 +2,8 @@
 Define API data model: interact with frontend
 Inherit BaseModel: Complete Type evaludation and conversion during run time
 """
-from typing import Any
-from pydantic import BaseModel, model_validator
+from typing import Any, Literal
+from pydantic import BaseModel, Field, model_validator
 
 from business_agent.domain.messages import ChatHistoryMessage
 
@@ -14,9 +14,20 @@ class ChatObject(BaseModel):
   attributes: dict[str, Any]
 
 
+# 会话控制权归属。协议见 meta-business-agent.md 附录 E.2 第 3 条：
+# 它是会话级而非消息级，所以挂在响应顶层而不是每条消息上。
+ControlOwner = Literal["AGENT", "PENDING_HUMAN", "HUMAN"]
+
+
 class ChatBotMessage(BaseModel):
-  text: str 
+  """
+  一条 bot 回复。text / cards / suggestions 可以同时有值。
+  object 与 cards 不并存；前端归一化：cards?.length ? cards : (object ? [object] : [])
+  """
+  text: str
   object: ChatObject | None = None
+  cards: list[ChatObject] = Field(default_factory=list)
+  suggestions: list[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -40,9 +51,11 @@ class ChatResponse(BaseModel):
   Chat responsive API data model
   """
   message_id: str
+  control_owner: ControlOwner = "AGENT"
   messages: list[ChatBotMessage]
 
 
 class ChatHistoryResponse(BaseModel):
   sender_id: str
+  control_owner: ControlOwner = "AGENT"
   messages: list[ChatHistoryMessage]

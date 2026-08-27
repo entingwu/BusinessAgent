@@ -8,7 +8,7 @@ No matter transfer via network or read/write via IO, could not directly operate 
 
 from enum import Enum
 from typing import Any, Literal, Self
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 class MessageType(Enum):
   TEXT = "text"
@@ -92,13 +92,24 @@ class UserMessage:
 
 @dataclass(slots=True)
 class BotMessage:
+  """
+  一条 bot 回复。协议见 meta-business-agent.md 附录 E。
+
+  关键点：text / cards / suggestions 三者可以同时有值。
+  旧结构是 text 与 object 二选一，带卡片时快捷回复会被丢掉，这正是要改掉的。
+  object 保留是为了兼容旧路径，与 cards 不并存——要么发 object（单个），要么发 cards（列表）。
+  """
   text: str  # 当下承载机器人的回复（文本内容） 一定会有值
-  object: FocusedObject | None = None  # 承载机器人的回复对象（后续内容扩展） TODO
+  object: FocusedObject | None = None  # 旧路径的单个业务对象，等价于 cards 只有一项
+  cards: list[FocusedObject] = field(default_factory=list)  # 新路径：业务对象列表
+  suggestions: list[str] = field(default_factory=list)      # 快捷回复按钮文案
 
   def to_dict(self) -> dict[str, Any]:
       return {
           "text": self.text,
-          "object": FocusedObject.to_dict(self.object) if self.object is not None else None
+          "object": FocusedObject.to_dict(self.object) if self.object is not None else None,
+          "cards": [FocusedObject.to_dict(card) for card in self.cards],
+          "suggestions": list(self.suggestions),
       }
 
   @classmethod
@@ -106,7 +117,10 @@ class BotMessage:
       object_data = data['object']
       return cls(
           text=data['text'],
-          object=FocusedObject.from_dict(object_data) if object_data is not None else None
+          object=FocusedObject.from_dict(object_data) if object_data is not None else None,
+          # 历史落库的状态没有这两个键，用 .get 兜住，否则老会话读回来直接 KeyError
+          cards=[FocusedObject.from_dict(card) for card in (data.get('cards') or [])],
+          suggestions=list(data.get('suggestions') or []),
       )
 
 
@@ -114,6 +128,10 @@ class BotMessage:
 class ProcessedResult:
   message_id: str
   messages: list[BotMessage]
+  # 会话控制权。附录 E.2 第 3 条：会话级而非消息级。
+  # 目前恒为 AGENT——真正的状态机是验收第 8 条（人工接管）的事，
+  # 这里先把字段留出来，届时由引擎写入，router 不用再动。
+  control_owner: str = "AGENT"
 
 @dataclass(slots=False)
 class ChatHistoryMessage:
