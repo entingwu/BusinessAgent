@@ -1,4 +1,4 @@
-# EconChatbot · LLM E-commerce Customer Service
+# BusinessAgent · LLM E-commerce Customer Service
 
 An LLM-driven multi-turn customer service system. Every user message is first run through an LLM planner that decides the intent for the turn, then routed down one of three tracks — **task flow / knowledge Q&A / chitchat**. The task track is driven by a YAML-configured state machine and handles business cases that need multi-turn slot filling: order status, logistics tracking, refund requests, and so on.
 
@@ -7,8 +7,31 @@ The repository holds all three services:
 | Directory | What it is | Stack | Port |
 | --- | --- | --- | --- |
 | [`customer-service-backend/`](customer-service-backend/) | Dialogue backend — planning, flows, knowledge, persistence | Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · LangChain · Qwen | 18082 |
-| [`customer-service-frontend/`](customer-service-frontend/) | Chat UI with a digital-human avatar | Vue 3 · Vite | 5174 |
+| [`customer-service-frontend/`](customer-service-frontend/) | Chat UI — conversation, cards, quick replies | Vue 3 · Vite | 5174 |
 | [`ecommerce-service-backend/`](ecommerce-service-backend/) | Mock e-commerce service — orders, logistics, products | Python · FastAPI · SQLAlchemy (sync) · MySQL 8 | 18081 |
+
+## Project status
+
+This repository is being evolved toward the spec in [`meta-business-agent.md`](meta-business-agent.md) (Chinese) — a simplified Meta Business Agent, organised into three priority tiers. The MVP is tier one.
+
+Against the spec's 10 MVP acceptance criteria, the current state is **4 implemented / 4 stubbed / 2 not started**:
+
+| Working today | Not yet |
+| --- | --- |
+| Multi-turn slot filling; flow switch / resume / cancel | RAG knowledge base — no embedding or vector store exists yet |
+| Real-time data from the e-commerce service (orders, logistics, products) | FAQ retrieval |
+| State persistence and session recovery | Human handoff — no `PENDING_HUMAN` state, the agent never stops replying |
+| End-to-end loop for the tool-calling track | Product recommendation, card lists, quick-reply buttons |
+
+**Known stubs** — these return successfully with placeholder content, so do not mistake them for runtime failures:
+
+- `knowledge/provider/knowledge.py` — `RagDefaultProvider` and `FaqDefaultProvider` return fixed placeholder strings (and their messages are swapped)
+- `task/action/customer/recommend_similar_products.py` — replies that recommendation is not wired up yet
+- `BotMessage.object` is never assigned anywhere in the project, so the frontend's card-rendering branch is unreachable
+- The frontend already renders `botMsg.suggestions`, but the backend has no such field — a contract gap to close on both sides at once
+
+`GET /orders/{id}/logistics` returns four trace nodes, but `lookup_logistics.py` reads only three summary fields and drops `traces`.
+
 
 ## Quick start
 
@@ -166,9 +189,9 @@ Seven knowledge intents are defined in [`business_agent/knowledge/intents.py`](c
 | --- | --- |
 | `product_info` | `api.product` (requires product card context) |
 | `order_info` | `api.order` (requires order card context) |
-| `refund_policy` / `return_policy` / `shipping_policy` | `faq.default` + `rag.default` |
-| `platform_rule` | `rag.default` |
-| `general_ecommerce_info` | `faq.default` + `rag.default` |
+| `refund_policy` / `return_policy` / `shipping_policy` | `faq.default` + `rag.default` *(both stubs)* |
+| `platform_rule` | `rag.default` *(stub)* |
+| `general_ecommerce_info` | `faq.default` + `rag.default` *(both stubs)* |
 
 ## Project layout
 
@@ -191,8 +214,7 @@ customer-service-backend/
 └── flow_config/        Flow YAML
 
 customer-service-frontend/
-├── src/App.vue         Chat UI, history, order/product sidebar, avatar session
-├── public/             Digital-human video assets
+├── src/App.vue         Chat UI, history, order/product sidebar
 ├── vite.config.js      Dev server + proxy to backend and e-commerce service
 └── vue-demo/           Standalone Vue scratch demo, not part of the app
 
@@ -208,13 +230,31 @@ ecommerce-service-backend/
 
 Prompt templates live in `business_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
 
+## Working with Claude Code
+
+[`CLAUDE.md`](CLAUDE.md) carries the architecture notes, commands and conventions that are not obvious from the file tree — read it before making changes.
+
+[`.claude/agents/`](.claude/agents/) defines four subagents for parallel work, split by directory ownership so they never edit the same files:
+
+| Agent | Scope |
+| --- | --- |
+| `commerce-api` | `ecommerce-service-backend/` — endpoints and schema |
+| `knowledge-rag` | `knowledge/` — the RAG and FAQ chain |
+| `frontend-cleanup` | `customer-service-frontend/` — deletion passes |
+| `spec-auditor` | Read-only; audits code against the spec's acceptance criteria |
+
+There is deliberately no agent for `domain/` + `api/` (the message-protocol spine) or `task/flows/` (the flow state machine). Both are easy to break by redesign and are kept in the main session.
+
+Two conventions worth knowing before editing: **Python here uses 2-space indentation** in `customer-service-backend/` but 4-space in `ecommerce-service-backend/`, and domain models carry hand-written `to_dict()` / `from_dict()` pairs — add a field to one without the other and it vanishes silently on the next state load.
+
+
 ## Debugging
 
 Use this VS Code configuration to launch the backend; breakpoints anywhere will be hit, since `main.py` does not enable `reload` and therefore runs single-process:
 
 ```jsonc
 {
-  "name": "FastAPI: EconChatbot",
+  "name": "FastAPI: BusinessAgent",
   "type": "debugpy",
   "request": "launch",
   "program": "${workspaceFolder}/customer-service-backend/business_agent/api/main.py",
