@@ -41,7 +41,7 @@ openapi_tags = [
     },
     {
         "name": "商品",
-        "description": "商品详情查询接口。",
+        "description": "商品检索与商品详情查询接口。",
     },
 ]
 

@@ -88,6 +88,23 @@ class ProductData(BaseModel):
     attributes: dict[str, Any]
 
 
+class ProductSearchItemData(BaseModel):
+    product_id: str
+    title: str
+    price: Decimal
+    cover_url: str | None = None
+    stock_status: str
+    attributes: dict[str, Any]
+
+
+class ProductSearchData(BaseModel):
+    items: list[ProductSearchItemData]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class UrgeShippingRequest(BaseModel):
     submitted_by: str = Field(default="system")
     note: str = Field(default="用户希望尽快发货")

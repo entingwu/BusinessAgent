@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -27,6 +28,8 @@ from app.schemas import (
     OperationResultData,
     OrderStatusData,
     ProductData,
+    ProductSearchData,
+    ProductSearchItemData,
     ProductSummaryData,
     RefundRequestBody,
     UserOrdersData,
@@ -37,9 +40,25 @@ from app.schemas import (
 
 router = APIRouter()
 
+# products.stock_status 目前是字符串枚举（如“有货”“缺货”），不是库存数量。
+# 这里用白名单判定“有货”，未知的新状态一律视为不可售，避免把缺货商品推荐给用户。
+_IN_STOCK_STATUSES = ("有货", "现货", "有库存")
+
+_LIKE_ESCAPE_CHAR = "\\"
+
 
 def _wrap(data):
     return ApiResponse(data=data)
+
+
+def _build_like_pattern(keyword: str) -> str:
+    """把用户关键词转成 LIKE 模式，转义 % 和 _ 等通配符，避免被当作通配符使用。"""
+    escaped = (
+        keyword.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace("%", _LIKE_ESCAPE_CHAR + "%")
+        .replace("_", _LIKE_ESCAPE_CHAR + "_")
+    )
+    return f"%{escaped}%"
 
 
 def _get_user_or_404(db: Session, user_id: str) -> User:
@@ -237,6 +256,95 @@ def order_logistics(order_id: str, db: Session = Depends(get_db)):
                 LogisticsTraceData(time=trace.trace_time, desc=trace.trace_desc)
                 for trace in traces
             ],
+        )
+    )
+
+
+@router.get(
+    "/products",
+    response_model=ApiResponse,
+    tags=["商品"],
+    summary="按条件检索商品",
+    description=(
+        "按关键词、价格区间和库存状态检索商品，返回分页后的候选商品列表与匹配总数，"
+        "供上层按用户偏好做商品推荐。所有查询参数均可选；没有匹配商品时返回空列表且 total 为 0，不返回 404。"
+    ),
+)
+def search_products(
+    q: str | None = Query(
+        default=None,
+        description="关键词，对商品标题与描述做模糊匹配（不区分大小写）。",
+    ),
+    min_price: Decimal | None = Query(
+        default=None,
+        ge=0,
+        description="价格下限，闭区间（含等于）。",
+    ),
+    max_price: Decimal | None = Query(
+        default=None,
+        ge=0,
+        description="价格上限，闭区间（含等于）。",
+    ),
+    in_stock: bool | None = Query(
+        default=None,
+        description="true 只返回有货商品，false 只返回非有货商品，不传则不按库存过滤。",
+    ),
+    limit: int = Query(default=10, ge=1, le=50, description="本次返回的最大条数，默认 10，上限 50。"),
+    offset: int = Query(default=0, ge=0, description="结果偏移量，用于翻页，默认 0。"),
+    db: Session = Depends(get_db),
+):
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(
+            status_code=400,
+            detail=f"价格区间不合法：价格下限 {min_price} 大于价格上限 {max_price}。",
+        )
+
+    conditions = []
+
+    keyword = q.strip() if q else ""
+    if keyword:
+        pattern = _build_like_pattern(keyword)
+        conditions.append(
+            or_(
+                Product.title.ilike(pattern, escape=_LIKE_ESCAPE_CHAR),
+                Product.description.ilike(pattern, escape=_LIKE_ESCAPE_CHAR),
+            )
+        )
+    if min_price is not None:
+        conditions.append(Product.price >= min_price)
+    if max_price is not None:
+        conditions.append(Product.price <= max_price)
+    if in_stock is True:
+        conditions.append(Product.stock_status.in_(_IN_STOCK_STATUSES))
+    elif in_stock is False:
+        conditions.append(Product.stock_status.notin_(_IN_STOCK_STATUSES))
+
+    matched = db.query(Product).filter(*conditions)
+    total = matched.count()
+    products = (
+        matched.order_by(Product.price.asc(), Product.product_id.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    return _wrap(
+        ProductSearchData(
+            items=[
+                ProductSearchItemData(
+                    product_id=product.product_id,
+                    title=product.title,
+                    price=product.price,
+                    cover_url=product.cover_url,
+                    stock_status=product.stock_status,
+                    attributes=product.attributes_json or {},
+                )
+                for product in products
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+            has_more=offset + len(products) < total,
         )
     )
 
