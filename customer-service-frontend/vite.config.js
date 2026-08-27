@@ -11,11 +11,6 @@ export default defineConfig({
         target: 'http://127.0.0.1:18082',
         changeOrigin: true,
       },
-      '/ws': {
-        target: 'ws://127.0.0.1:18082',
-        changeOrigin: true,
-        ws: true,
-      },
       '/commerce': {
         // 远程 (老师提供的服务器), 需要时把下面一行换回来
         // target: 'http://111.228.53.183:18081',
