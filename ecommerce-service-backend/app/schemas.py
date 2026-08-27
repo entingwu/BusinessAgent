@@ -94,6 +94,8 @@ class ProductSearchItemData(BaseModel):
     price: Decimal
     cover_url: str | None = None
     stock_status: str
+    # stock_status 是 VARCHAR 字符串，语义判定收在中台，调用方不必自己猜哪些取值算有货
+    in_stock: bool
     attributes: dict[str, Any]
 
 
