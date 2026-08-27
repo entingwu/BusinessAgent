@@ -46,7 +46,7 @@ cp .env.example .env
 # Edit .env — at minimum set LLM_API_KEY and DATABASE_URL
 
 # 3. Run the service
-uv run python econ_agent/api/main.py
+uv run python business_agent/api/main.py
 ```
 
 Once running:
@@ -74,7 +74,7 @@ Then open <http://127.0.0.1:5174>. The dev server proxies `/api` and `/health` t
 
 ## Configuration
 
-All backend configuration is environment-driven. [`econ_agent/config/settings.py`](customer-service-backend/econ_agent/config/settings.py) loads it from `customer-service-backend/.env` via pydantic-settings — a missing key fails startup immediately.
+All backend configuration is environment-driven. [`business_agent/config/settings.py`](customer-service-backend/business_agent/config/settings.py) loads it from `customer-service-backend/.env` via pydantic-settings — a missing key fails startup immediately.
 
 | Variable | Description | Example |
 | --- | --- | --- |
@@ -110,7 +110,7 @@ The e-commerce service exposes `/health`, `/orders/{id}`, `/orders/{id}/status`,
 | `GET` | `/api/chat/history?sender_id=` | Full chat history across all of that user's sessions |
 | `GET` | `/docs` | Swagger UI |
 
-Request/response models for `POST /api/chat` are defined in [`econ_agent/api/schemas.py`](customer-service-backend/econ_agent/api/schemas.py).
+Request/response models for `POST /api/chat` are defined in [`business_agent/api/schemas.py`](customer-service-backend/business_agent/api/schemas.py).
 
 ## Architecture
 
@@ -138,9 +138,9 @@ flowchart TD
 
 Responsibilities are split across three layers:
 
-- **API layer** (`econ_agent/api/`) only converts between API models and domain models
-- **Service layer** (`econ_agent/services/`) owns the state load/save boundary
-- **Engine layer** (`econ_agent/engines/`) is pure state computation and touches no I/O
+- **API layer** (`business_agent/api/`) only converts between API models and domain models
+- **Service layer** (`business_agent/services/`) owns the state load/save boundary
+- **Engine layer** (`business_agent/engines/`) is pure state computation and touches no I/O
 
 Sessions expire after 1 hour of inactivity: the old session is closed, runtime state is reset, and a new session starts (history is preserved).
 
@@ -154,13 +154,13 @@ Flows are configured as YAML under [`flow_config/`](customer-service-backend/flo
 
 Step types are `start` / `action` / `collect` / `end`, chained together via `next`. A `collect` step suspends the flow to ask the user for a slot value, then resumes once it is filled — if the user changes the subject mid-flow, the original flow is interrupted and an attempt is made to resume it later.
 
-**Commands** (`econ_agent/task/commands/`): `start_flow`, `set_slots`, `resume_flow`, `cancel_flow`. These are exactly what the LLM planner emits.
+**Commands** (`business_agent/task/commands/`): `start_flow`, `set_slots`, `resume_flow`, `cancel_flow`. These are exactly what the LLM planner emits.
 
-**Actions** (`econ_agent/task/action/`): built-in `action_response` (reply) and `action_listen` (wait for user input); business actions cover order status lookup, logistics lookup, and similar-product recommendation. Action classes under `econ_agent/task/action/customer/` are **discovered and registered automatically** by `builder.py` via `pkgutil` — to add one, just drop a class extending `Action` into that directory; no manual registration needed.
+**Actions** (`business_agent/task/action/`): built-in `action_response` (reply) and `action_listen` (wait for user input); business actions cover order status lookup, logistics lookup, and similar-product recommendation. Action classes under `business_agent/task/action/customer/` are **discovered and registered automatically** by `builder.py` via `pkgutil` — to add one, just drop a class extending `Action` into that directory; no manual registration needed.
 
 ## Knowledge Q&A
 
-Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](customer-service-backend/econ_agent/knowledge/intents.py), each wired to one or more providers:
+Seven knowledge intents are defined in [`business_agent/knowledge/intents.py`](customer-service-backend/business_agent/knowledge/intents.py), each wired to one or more providers:
 
 | Intent | Providers |
 | --- | --- |
@@ -174,7 +174,7 @@ Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](custo
 
 ```
 customer-service-backend/
-├── econ_agent/
+├── business_agent/
 │   ├── api/            FastAPI app, routes, request/response models, DI
 │   ├── services/       Dialogue service — the state read/write boundary
 │   ├── engines/        Dialogue engine + dependency wiring (builder.py)
@@ -206,7 +206,7 @@ ecommerce-service-backend/
 └── docker-compose.yml  MySQL 8 + the service itself
 ```
 
-Prompt templates live in `econ_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
+Prompt templates live in `business_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
 
 ## Debugging
 
@@ -217,7 +217,7 @@ Use this VS Code configuration to launch the backend; breakpoints anywhere will 
   "name": "FastAPI: EconChatbot",
   "type": "debugpy",
   "request": "launch",
-  "program": "${workspaceFolder}/customer-service-backend/econ_agent/api/main.py",
+  "program": "${workspaceFolder}/customer-service-backend/business_agent/api/main.py",
   "console": "integratedTerminal",
   "cwd": "${workspaceFolder}/customer-service-backend",
   "env": { "PYTHONPATH": "${workspaceFolder}/customer-service-backend" }
@@ -226,14 +226,14 @@ Use this VS Code configuration to launch the backend; breakpoints anywhere will 
 
 Do not use "debug current file" on a module like `handler.py` that has no `__main__` — it will just import once and exit, and no breakpoint will be hit. If `reload=True` or `workers=` is ever added to `uvicorn.run`, uvicorn forks a subprocess and breakpoints stop working; add `"subProcess": true` in that case.
 
-The engine runs with `echo=True`, so every SQL statement is printed to the console. Turn it off in [`econ_agent/infrastructure/db_client.py`](customer-service-backend/econ_agent/infrastructure/db_client.py) if it gets noisy.
+The engine runs with `echo=True`, so every SQL statement is printed to the console. Turn it off in [`business_agent/infrastructure/db_client.py`](customer-service-backend/business_agent/infrastructure/db_client.py) if it gets noisy.
 
 A few modules can be run standalone as a sanity check (from `customer-service-backend/`):
 
 ```bash
-uv run python -m econ_agent.config.settings          # config loads?
-uv run python -m econ_agent.infrastructure.db_client # database reachable?
-uv run python -m econ_agent.task.action.builder      # actions registered?
+uv run python -m business_agent.config.settings          # config loads?
+uv run python -m business_agent.infrastructure.db_client # database reachable?
+uv run python -m business_agent.task.action.builder      # actions registered?
 ```
 
-`-m` is required here: the project is not installed as a package, so `uv run python <file path>` only puts that file's own directory on `sys.path` and running it directly fails with `ModuleNotFoundError: No module named 'econ_agent'`. `econ_agent/api/main.py` is the exception — it inserts the project root into `sys.path` itself at the top of the file.
+`-m` is required here: the project is not installed as a package, so `uv run python <file path>` only puts that file's own directory on `sys.path` and running it directly fails with `ModuleNotFoundError: No module named 'business_agent'`. `business_agent/api/main.py` is the exception — it inserts the project root into `sys.path` itself at the top of the file.
