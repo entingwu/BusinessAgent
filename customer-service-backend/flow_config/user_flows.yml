@@ -29,6 +29,11 @@ slots:
     label: 物流进度
     description: 物流当前进度
 
+  logistics_traces:
+    type: text
+    label: 物流轨迹
+    description: 物流轨迹节点，每行一个，由 action_lookup_logistics 渲染好后写入
+
   product_id:
     type: text
     label: 商品ID
@@ -113,7 +118,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "订单{{ slots.order_number }}由{{ slots.logistics_company }}配送，物流单号是{{ slots.tracking_number }}。当前进度：{{ slots.logistics_status }}。"
+          text: "订单{{ slots.order_number }}由{{ slots.logistics_company }}配送，物流单号是{{ slots.tracking_number }}。当前进度：{{ slots.logistics_status }}。{% if slots.logistics_traces %}\n\n物流轨迹：\n{{ slots.logistics_traces }}{% endif %}"
         next: end
 
       - id: end
