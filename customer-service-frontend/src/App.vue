@@ -696,7 +696,7 @@ async function copyText(text, key) {
                 <path :d="item.icon" fill="currentColor" />
               </svg>
               <span class="nav-item-label">{{ item.label }}</span>
-              <span v-if="!item.ready" class="nav-item-tag">Coming soon</span>
+              <span v-if="!item.ready" class="nav-item-tag">Soon</span>
             </button>
           </li>
         </ul>
@@ -1197,11 +1197,15 @@ async function copyText(text, key) {
 .nav-item-label {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-item-tag {
   flex-shrink: 0;
-  padding: 2px 8px;
+  white-space: nowrap;
+  padding: 2px 7px;
   border-radius: var(--radius-pill);
   background: var(--tone-muted-bg);
   color: var(--tone-muted-text);
