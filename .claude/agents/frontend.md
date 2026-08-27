@@ -14,6 +14,7 @@ description: 处理 customer-service-frontend/ 的全部前端工作——协议
 - **不引入新依赖。** 不上 UI 框架、CSS 预处理器、图标库、状态管理库。原生 CSS + Vue 3 SFC,和现在一样。
 - **不加 mock 数据或「方便预览」的调试开关。** 例外只有任务里明确要求的。
 - **不 commit、不 push、不合并回主分支。** 在 worktree 里干活就把改动留在 worktree。
+- **界面文案一律用英语。** 页面已经英语化，新增的按钮、提示、错误文案、占位符都写英语。**代码注释继续用中文**（CLAUDE.md 的约定）。一个例外：`ORDER_STATUS_CLASS` 和 `ORDER_STATUS_LABEL` 的**键**是业务中台返回的中文原值，改了就查不到表——只能改 `ORDER_STATUS_LABEL` 的值。
 - **保住既有交互。** 除非任务明确要求改,否则这些行为改完必须和改前一模一样:发消息、加载历史与「以上为历史消息」分隔、typing 指示、商品/订单卡片点击回填槽位(`sendProduct` / `sendOrder`)、快捷回复渲染与回传(`botMsg.suggestions` + `sendSuggestion`)、业务对象侧边栏、`sender_id` 输入框。
 
 ## 验证纪律
