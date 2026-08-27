@@ -1,0 +1,16 @@
+# 本地 macOS 开发用 Dockerfile：使用官方镜像源 + 官方 PyPI
+# （原 Dockerfile 走的是国内镜像 docker.1ms.run / 阿里云 PyPI，在境外网络下拉不动）
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY . .
+
+EXPOSE 18081
+
+CMD ["uv", "run", "uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "18081"]

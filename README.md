@@ -2,18 +2,38 @@
 
 An LLM-driven multi-turn customer service system. Every user message is first run through an LLM planner that decides the intent for the turn, then routed down one of three tracks — **task flow / knowledge Q&A / chitchat**. The task track is driven by a YAML-configured state machine and handles business cases that need multi-turn slot filling: order status, logistics tracking, refund requests, and so on.
 
-This repository holds two of the three services:
+The repository holds all three services:
 
 | Directory | What it is | Stack | Port |
 | --- | --- | --- | --- |
 | [`customer-service-backend/`](customer-service-backend/) | Dialogue backend — planning, flows, knowledge, persistence | Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · LangChain · Qwen | 18082 |
 | [`customer-service-frontend/`](customer-service-frontend/) | Chat UI with a digital-human avatar | Vue 3 · Vite | 5174 |
-
-A third component, the e-commerce backend that serves order/logistics/product data (port 18081), lives outside this repository. See [External dependencies](#external-dependencies).
+| [`ecommerce-service-backend/`](ecommerce-service-backend/) | Mock e-commerce service — orders, logistics, products | Python · FastAPI · SQLAlchemy (sync) · MySQL 8 | 18081 |
 
 ## Quick start
 
-### Backend
+### 1. E-commerce service + MySQL
+
+Both the dialogue backend and the frontend need this running first. It ships as a Docker stack:
+
+```bash
+cd ecommerce-service-backend
+docker compose -p ecommerce up -d
+docker compose -p ecommerce ps       # wait for mysql to report "healthy"
+```
+
+Use `-p ecommerce` consistently. The Compose project name defaults to the directory name, and the named volume is derived from it — starting the stack under a different project name creates a **fresh, empty database** instead of reusing the existing one.
+
+This brings up MySQL on 13306 (seeded on first run from [`docker/mysql/init/`](ecommerce-service-backend/docker/mysql/init/)) and the e-commerce API on 18081. Verify with:
+
+```bash
+curl http://127.0.0.1:18081/health
+curl http://127.0.0.1:18081/users/u1001/orders
+```
+
+The dialogue backend additionally needs a `custom_service` database on that same MySQL instance for its own `dialogue_states` table.
+
+### 2. Dialogue backend
 
 ```bash
 cd customer-service-backend
@@ -42,7 +62,7 @@ curl -X POST http://127.0.0.1:18082/api/chat \
   -d '{"sender_id":"u1001","text":"I want to check my order"}'
 ```
 
-### Frontend
+### 3. Frontend
 
 ```bash
 cd customer-service-frontend
@@ -75,7 +95,11 @@ All backend configuration is environment-driven. [`econ_agent/config/settings.py
 | E-commerce service | Order detail `/orders/{id}`, logistics `/orders/{id}/logistics`, products, per-user order lists | `127.0.0.1:18081` |
 | LLM | Turn planning, knowledge answering, chitchat, clarification wording | DashScope |
 
-The e-commerce service and MySQL come from a sibling `ecommerce-service-backend` project's `docker-compose.yml`, which is not part of this repository.
+Both come from [`ecommerce-service-backend/docker-compose.yml`](ecommerce-service-backend/docker-compose.yml) in this repository.
+
+The e-commerce service exposes `/health`, `/orders/{id}`, `/orders/{id}/status`, `/orders/{id}/logistics`, `/orders/{id}/refund-applications`, `/orders/{id}/shipping-reminders`, `/products/{id}`, `/users/{id}/orders` and `/users/{id}/products`. Its MySQL schema covers users, products, orders, order items, logistics records and traces, refund requests and shipping reminders.
+
+> The Compose file carries throwaway credentials for the local demo database in plain text. They are scoped to a container bound to localhost; do not reuse them anywhere real.
 
 ## API
 
@@ -171,6 +195,15 @@ customer-service-frontend/
 ├── public/             Digital-human video assets
 ├── vite.config.js      Dev server + proxy to backend and e-commerce service
 └── vue-demo/           Standalone Vue scratch demo, not part of the app
+
+ecommerce-service-backend/
+├── app/
+│   ├── api.py          All REST routes
+│   ├── models.py       SQLAlchemy ORM models
+│   ├── schemas.py      Pydantic response models
+│   └── database.py     Sync engine + session factory
+├── docker/mysql/init/  Schema + seed SQL, run once on first volume init
+└── docker-compose.yml  MySQL 8 + the service itself
 ```
 
 Prompt templates live in `econ_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
