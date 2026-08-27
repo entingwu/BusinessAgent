@@ -1,14 +1,23 @@
-# EconChatbot · E-commerce Customer Service Backend
+# EconChatbot · LLM E-commerce Customer Service
 
-An LLM-driven multi-turn customer service backend. Every user message is first run through an LLM planner that decides the intent for the turn, then routed down one of three tracks — **task flow / knowledge Q&A / chitchat**. The task track is driven by a YAML-configured state machine and handles business cases that need multi-turn slot filling: order status, logistics tracking, refund requests, and so on.
+An LLM-driven multi-turn customer service system. Every user message is first run through an LLM planner that decides the intent for the turn, then routed down one of three tracks — **task flow / knowledge Q&A / chitchat**. The task track is driven by a YAML-configured state machine and handles business cases that need multi-turn slot filling: order status, logistics tracking, refund requests, and so on.
 
-Stack: Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · aiomysql · LangChain · Qwen (DashScope OpenAI-compatible API)
+This repository holds two of the three services:
 
-> This repository contains the **customer service backend only**. At runtime it also depends on two components that live outside this repo: an e-commerce backend service that serves order/logistics/product data (default `http://127.0.0.1:18081`), and a chat frontend. See [External dependencies](#external-dependencies).
+| Directory | What it is | Stack | Port |
+| --- | --- | --- | --- |
+| [`customer-service-backend/`](customer-service-backend/) | Dialogue backend — planning, flows, knowledge, persistence | Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · LangChain · Qwen | 18082 |
+| [`customer-service-frontend/`](customer-service-frontend/) | Chat UI with a digital-human avatar | Vue 3 · Vite | 5174 |
+
+A third component, the e-commerce backend that serves order/logistics/product data (port 18081), lives outside this repository. See [External dependencies](#external-dependencies).
 
 ## Quick start
 
+### Backend
+
 ```bash
+cd customer-service-backend
+
 # 1. Install dependencies (via uv)
 uv sync
 
@@ -33,9 +42,19 @@ curl -X POST http://127.0.0.1:18082/api/chat \
   -d '{"sender_id":"u1001","text":"I want to check my order"}'
 ```
 
+### Frontend
+
+```bash
+cd customer-service-frontend
+npm install
+npm run dev
+```
+
+Then open <http://127.0.0.1:5174>. The dev server proxies `/api` and `/health` to the backend on 18082 and `/commerce` to the e-commerce service on 18081, so no CORS setup is needed — see [`vite.config.js`](customer-service-frontend/vite.config.js). Enter a `sender_id` (for example `u1001`) in the UI to start a conversation.
+
 ## Configuration
 
-All configuration is environment-driven. [`econ_agent/config/settings.py`](econ_agent/config/settings.py) loads it from `.env` at the project root via pydantic-settings — a missing key fails startup immediately.
+All backend configuration is environment-driven. [`econ_agent/config/settings.py`](customer-service-backend/econ_agent/config/settings.py) loads it from `customer-service-backend/.env` via pydantic-settings — a missing key fails startup immediately.
 
 | Variable | Description | Example |
 | --- | --- | --- |
@@ -56,7 +75,7 @@ All configuration is environment-driven. [`econ_agent/config/settings.py`](econ_
 | E-commerce service | Order detail `/orders/{id}`, logistics `/orders/{id}/logistics`, products, per-user order lists | `127.0.0.1:18081` |
 | LLM | Turn planning, knowledge answering, chitchat, clarification wording | DashScope |
 
-The e-commerce service and MySQL are provided by the sibling `ecommerce-service-backend` project's `docker-compose.yml` (not in this repo).
+The e-commerce service and MySQL come from a sibling `ecommerce-service-backend` project's `docker-compose.yml`, which is not part of this repository.
 
 ## API
 
@@ -67,7 +86,7 @@ The e-commerce service and MySQL are provided by the sibling `ecommerce-service-
 | `GET` | `/api/chat/history?sender_id=` | Full chat history across all of that user's sessions |
 | `GET` | `/docs` | Swagger UI |
 
-Request/response models for `POST /api/chat` are defined in [`econ_agent/api/schemas.py`](econ_agent/api/schemas.py).
+Request/response models for `POST /api/chat` are defined in [`econ_agent/api/schemas.py`](customer-service-backend/econ_agent/api/schemas.py).
 
 ## Architecture
 
@@ -103,7 +122,7 @@ Sessions expire after 1 hour of inactivity: the old session is closed, runtime s
 
 ## Task flows
 
-Flows are configured as YAML under [`flow_config/`](flow_config/) and loaded by `FlowLoader`, so changing a flow needs no code change.
+Flows are configured as YAML under [`flow_config/`](customer-service-backend/flow_config/) and loaded by `FlowLoader`, so changing a flow needs no code change.
 
 **Business flows** (`user_flows.yml`): `onboarding`, `order_status_query`, `logistics_tracking`, `refund_request`, `similar_product_recommendation`, `human_handoff`
 
@@ -117,7 +136,7 @@ Step types are `start` / `action` / `collect` / `end`, chained together via `nex
 
 ## Knowledge Q&A
 
-Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](econ_agent/knowledge/intents.py), each wired to one or more providers:
+Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](customer-service-backend/econ_agent/knowledge/intents.py), each wired to one or more providers:
 
 | Intent | Providers |
 | --- | --- |
@@ -130,46 +149,53 @@ Seven knowledge intents are defined in [`econ_agent/knowledge/intents.py`](econ_
 ## Project layout
 
 ```
-econ_agent/
-├── api/            FastAPI app, routes, request/response models, DI
-├── services/       Dialogue service — the state read/write boundary
-├── engines/        Dialogue engine + dependency wiring (builder.py)
-├── plan/           LLM turn planning and validation
-├── task/           Task track: flows / commands / action
-├── knowledge/      Knowledge track: intents + providers
-├── chitchat/       Chitchat track
-├── clarify/        Clarification prompts
-├── domain/         Domain models: messages, contexts, dialogue state
-├── repository/     SQLAlchemy persistence
-├── infrastructure/ DB / HTTP / LLM clients
-├── prompt/         Jinja2 prompt templates
-└── config/         Settings
-flow_config/        Flow YAML
+customer-service-backend/
+├── econ_agent/
+│   ├── api/            FastAPI app, routes, request/response models, DI
+│   ├── services/       Dialogue service — the state read/write boundary
+│   ├── engines/        Dialogue engine + dependency wiring (builder.py)
+│   ├── plan/           LLM turn planning and validation
+│   ├── task/           Task track: flows / commands / action
+│   ├── knowledge/      Knowledge track: intents + providers
+│   ├── chitchat/       Chitchat track
+│   ├── clarify/        Clarification prompts
+│   ├── domain/         Domain models: messages, contexts, dialogue state
+│   ├── repository/     SQLAlchemy persistence
+│   ├── infrastructure/ DB / HTTP / LLM clients
+│   ├── prompt/         Jinja2 prompt templates
+│   └── config/         Settings
+└── flow_config/        Flow YAML
+
+customer-service-frontend/
+├── src/App.vue         Chat UI, history, order/product sidebar, avatar session
+├── public/             Digital-human video assets
+├── vite.config.js      Dev server + proxy to backend and e-commerce service
+└── vue-demo/           Standalone Vue scratch demo, not part of the app
 ```
 
 Prompt templates live in `econ_agent/prompt/jinja2/` (`turn_plan` / `knowledge_respond` / `chitchat_respond` / `clarify_respond`) — edit these to change the assistant's wording.
 
 ## Debugging
 
-Use this VS Code configuration to launch the service; breakpoints anywhere will be hit, since `main.py` does not enable `reload` and therefore runs single-process:
+Use this VS Code configuration to launch the backend; breakpoints anywhere will be hit, since `main.py` does not enable `reload` and therefore runs single-process:
 
 ```jsonc
 {
   "name": "FastAPI: EconChatbot",
   "type": "debugpy",
   "request": "launch",
-  "program": "${workspaceFolder}/econ_agent/api/main.py",
+  "program": "${workspaceFolder}/customer-service-backend/econ_agent/api/main.py",
   "console": "integratedTerminal",
-  "cwd": "${workspaceFolder}",
-  "env": { "PYTHONPATH": "${workspaceFolder}" }
+  "cwd": "${workspaceFolder}/customer-service-backend",
+  "env": { "PYTHONPATH": "${workspaceFolder}/customer-service-backend" }
 }
 ```
 
 Do not use "debug current file" on a module like `handler.py` that has no `__main__` — it will just import once and exit, and no breakpoint will be hit. If `reload=True` or `workers=` is ever added to `uvicorn.run`, uvicorn forks a subprocess and breakpoints stop working; add `"subProcess": true` in that case.
 
-The engine runs with `echo=True`, so every SQL statement is printed to the console. Turn it off in [`econ_agent/infrastructure/db_client.py`](econ_agent/infrastructure/db_client.py) if it gets noisy.
+The engine runs with `echo=True`, so every SQL statement is printed to the console. Turn it off in [`econ_agent/infrastructure/db_client.py`](customer-service-backend/econ_agent/infrastructure/db_client.py) if it gets noisy.
 
-A few modules can be run standalone as a sanity check:
+A few modules can be run standalone as a sanity check (from `customer-service-backend/`):
 
 ```bash
 uv run python -m econ_agent.config.settings          # config loads?

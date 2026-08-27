@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.claude/settings.local.json
 
 # ===== 虚拟环境 =====
 .venv/
@@ -25,6 +26,12 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# ===== Node / 前端 =====
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.vite/
 
 # ===== 编辑器 =====
 .vscode/
