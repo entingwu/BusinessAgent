@@ -25,7 +25,9 @@ class ActionLookupOrderStatus(Action):
 
     # 3. 封装到ActionResult的slots中返回
     return ActionResult(updated_slots={
-      "order_status": payload.get("status_desc") or payload.get("status") or "unknown",
+      # 与 lookup_logistics 同样的处理：中台的 status_desc 自带句号，
+      # 而 YAML 模板也会补一个，直接拼会出现「派往目的地。。」
+      "order_status": (payload.get("status_desc") or payload.get("status") or "unknown").rstrip("。."),
       "order_summary": self._build_order_summary(payload),
     })
 
@@ -36,9 +38,11 @@ class ActionLookupOrderStatus(Action):
     items = payload.get("items") or []
 
     if items:
-      titles = [str(item.get("title") or "").strip() 
+      titles = [str(item.get("title") or "").strip()
                 for item in items[:2] if item.get("title")]
       if titles:
-        parts.append("商品： " + ",".join(titles))
-    return ".".join(parts) + "." if parts else ""
+        parts.append("商品：" + "、".join(titles))
+    # 中文行文统一用全角标点，原来用 ASCII 的 "." 和 "," 拼出来是
+    # 「订单金额 ￥899.00.商品: 耳机.」这种半中半英的样子
+    return "，".join(parts) + "。" if parts else ""
     
