@@ -1,5 +1,9 @@
 -- 演示用种子数据。前端默认 sender_id 为 u1001
-USE commerce;
+-- 这里刻意不写 USE commerce;。docker-entrypoint 跑 initdb 脚本时已经带了
+-- --database="$MYSQL_DATABASE"（compose 里是 commerce），所以那行是冗余的；
+-- 而留着它会让这个文件在被灌进**别的库**时劫持目标库——本文件开头就是 DROP TABLE，
+-- 一次这样的误用已经把共享 commerce 清空过一次（表还在、数据全没）。
+-- 默认库由调用方决定，不由文件决定。
 
 SET NAMES utf8mb4;
 

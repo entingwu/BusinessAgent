@@ -48,10 +48,15 @@ class ActionRecommendProducts(Action):
   reads = (
     SlotSpec(name="product_use_case", required=False, description="使用场景，映射到中台的 use_case 属性过滤"),
     SlotSpec(name="product_style", required=False, description="风格偏好，映射到中台的 style 属性过滤"),
-    # product_size 目前没有任何 collect 步骤收集它，但 SLOT_TO_ATTR 的循环确实会读，
-    # 一旦有值就会实质改变检索结果（实测传「大号」返回 5 款）。
-    # reads 的意义是「让依赖哪些槽位成为可读取的事实」，漏掉一个正在生效的槽位，这个事实就是错的
-    SlotSpec(name="product_size", required=False, description="尺码，映射到中台的 size 属性过滤"),
+    # 这里**刻意不列 product_size**，尽管 SLOT_TO_ATTR 里有它的映射：
+    # 那条映射的代码是活的，但它的输入是死的——product_size 既不在 user_flows.yml
+    # 的槽位声明里，也没有任何 collect 步骤收集它，于是 slot_guard 会在写入前丢掉它
+    # （实测日志：「丢弃槽位 product_size='大号'：流程 product_recommendation 只声明了 …」），
+    # 运行时 slots.get("product_size") 恒为 None。
+    # 我一度把它加进 reads，依据是「直接给 action 传这个槽位确实会改变检索结果」——
+    # 但那个实测绕过了守卫，不是真实链路。多声明一个永不生效的槽位，
+    # 和漏掉一个正在生效的槽位一样，都让 reads 这个「事实」变成假的。
+    # 要让它真活，得先在 user_flows.yml 里把它补成可收集的槽位。
     SlotSpec(name="product_budget", required=False, description="预算上限，解析出数字后作为 max_price"),
     SlotSpec(name="product_round", required=False, description="第几轮收敛，用于生成不重复的快捷回复"),
   )

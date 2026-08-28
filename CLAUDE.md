@@ -47,6 +47,8 @@ There is **no version table** — nothing records which migrations have run. Eve
 | `2026-08-27-unify-product-attributes.sql` | data only | attribute filtering matches nothing; endpoints still answer |
 | `2026-08-28-stock-quantity-and-order-idempotency.sql` | **schema** | **every product and order endpoint returns 500** — the ORM selects `products.stock_quantity`, `orders.idempotency_key`, `delivery_method` and `request_fingerprint`, and MySQL raises `Unknown column` |
 
+**`init/` and `migrations/` differ on purpose about `USE`.** The two `init/` files carry **no** `USE` statement — the entrypoint already runs them with `--database="$MYSQL_DATABASE"`, so the caller's database wins and the same files can be loaded into a throwaway schema for testing without touching the shared one. The `migrations/` scripts **keep** `USE commerce;` and hardcode `TABLE_SCHEMA = 'commerce'` in their guards, because they target that one database by definition. Do not "make them consistent" — the asymmetry is the safety property. It was learned the hard way: `01-schema.sql` opens with eight `DROP TABLE`, and one load that let the file's own `USE commerce;` override the target database emptied the shared database (tables intact, every row gone).
+
 For a schema migration the order is **migrate first, then deploy the code** — the reverse leaves the service broken until you notice. There is no automation for this: `docker-compose.yml` mounts only `init/`, and `init/` runs only on first volume creation.
 
 Two traps around this:
