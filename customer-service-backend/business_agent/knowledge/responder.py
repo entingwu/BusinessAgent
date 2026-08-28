@@ -36,17 +36,24 @@ from business_agent.domain.messages import BotMessage
 
 logger = logging.getLogger(__name__)
 
-# 未命中兜底：说明需要什么信息 + 引导转人工，不做任何事实性陈述
+# 未命中兜底：说明需要什么信息 + 引导转人工，不做任何事实性陈述。
+#
+# 「talk to a human」这句不是随便挑的措辞——它必须是 handoff/control.py 的
+# HUMAN_REQUEST_PATTERNS_EN 里真实存在的短语。这里教用户说一句话，而那句话
+# 能不能生效由另一个文件决定：两处不同步，就等于教用户说一句不管用的咒语，
+# 而且失败是静默的（用户照做了，什么也没发生）。改任一处都要对照另一处。
 FALLBACK_NO_HIT_TEXT = (
-    "这个问题我在商家的知识库里没有查到对应的说明，不能凭印象回答你。"
-    "你可以补充一下具体场景（比如涉及的订单号、商品名称，或者你想了解的是退货、退款还是配送哪一类），"
-    "我再帮你找一次；也可以直接说「转人工」，我把你接给人工客服。"
+    "I could not find anything in the merchant's knowledge base that covers this, "
+    "and I will not answer from impression. "
+    "You can add some context — an order number, a product name, or whether this is about "
+    "returns, refunds or shipping — and I will look again. "
+    "You can also just say \"talk to a human\" and I will hand you over to a human agent."
 )
 
 # 降级兜底：向量库或 Embedding 服务不可用（规范 5.1 / C.4.7）
 FALLBACK_UNAVAILABLE_TEXT = (
-    "知识库暂时查不了，为避免给你不准确的信息，我先不猜。"
-    "我帮你转人工客服跟进，或者你稍后再问我一次。"
+    "I cannot reach the knowledge base right now, and I would rather not guess than give you "
+    "something inaccurate. I can hand you over to a human agent, or you can ask me again shortly."
 )
 
 
@@ -215,8 +222,8 @@ class KnowledgeResponder:
         blocks = []
         for index, chunk in enumerate(chunks, start=1):
             if chunk.score is None:
-                header = f"[片段{index}] 来源：{chunk.citation()}（业务接口实时数据）"
+                header = f"[snippet {index}] source: {chunk.citation()} (live business API data)"
             else:
-                header = f"[片段{index}] 来源：{chunk.citation()}（相似度 {chunk.score:.3f}）"
+                header = f"[snippet {index}] source: {chunk.citation()} (similarity {chunk.score:.3f})"
             blocks.append(f"{header}\n{chunk.content.strip()}")
         return "\n\n".join(blocks)

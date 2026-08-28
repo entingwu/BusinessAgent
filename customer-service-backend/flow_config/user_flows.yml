@@ -1,46 +1,46 @@
 slots:
   order_number:
     type: text
-    label: 订单号
-    description: 用户的订单号
+    label: order number
+    description: The user's order number
     # 这里刻意不加 pattern：中台种子数据是 o3000x，但订单号的真实形态并不固定
     # （提示词里的示例就是 A20260408001 这种），约束写窄了会把合法订单号挡在门外。
     # 反向的串台（商品号填进订单号）由 product_id 的 pattern 与流程槽位白名单一起拦。
 
   order_status:
     type: text
-    label: 订单状态
-    description: 订单当前状态
+    label: order status
+    description: Current status of the order
 
   order_summary:
     type: text
-    label: 订单摘要
-    description: 订单摘要信息
+    label: order summary
+    description: Summary line for the order
 
   tracking_number:
     type: text
-    label: 物流单号
-    description: 物流单号
+    label: tracking number
+    description: Shipment tracking number
 
   logistics_company:
     type: text
-    label: 物流公司
-    description: 物流公司名称
+    label: carrier
+    description: Name of the shipping carrier
 
   logistics_status:
     type: text
-    label: 物流进度
-    description: 物流当前进度
+    label: shipment progress
+    description: Current progress of the shipment
 
   logistics_traces:
     type: text
-    label: 物流轨迹
-    description: 物流轨迹节点，每行一个，由 action_lookup_logistics 渲染好后写入
+    label: tracking history
+    description: Tracking events, one per line, rendered and written by action_lookup_logistics
 
   product_id:
     type: text
-    label: 商品ID
-    description: 当前咨询商品的唯一标识
+    label: product ID
+    description: Unique identifier of the product being discussed
     # 中台的商品编号统一是 p + 数字（p2001…p2024）。这条约束的来历：LLM 会把上一轮的
     # 订单号顺手填进来——实测「查订单 o30002 的物流」之后紧接着问「看看类似的商品推荐」，
     # o30002 会进 product_id，当时的 similar_product_recommendation 流程就拿着订单号去查商品。
@@ -52,28 +52,35 @@ slots:
     # 一旦哪个流程重新收集它，这条约束立即生效，不必再踩一遍同样的坑。
     pattern: "(?i)p\\d{3,}"
 
+  # 下面三个偏好槽位的**可选值刻意保留中文**，不随本次英语化一起翻译。
+  # 它们不是给人看的文案，而是直接送去中台做属性过滤的**匹配键**：
+  # 中台 24 件商品的 attributes_json 里存的就是 "use_case": "办公"、"style": "极简"。
+  # 只翻这里而不同步中台种子数据，检索会返回空列表——而空列表和「确实没有匹配
+  # 商品」在界面上完全一样，失败是静默的。
+  # 要英语化这批值，必须同时改四处独立事实：中台迁移脚本、这里、
+  # recommend_products.py 的 STYLE_VALUES、以及中台的属性白名单。那是单独一档的活。
   product_use_case:
     type: text
-    label: 使用场景
-    description: 商品的使用场景。可选值：办公、游戏、差旅、居家、健身、通勤
+    label: use case
+    description: "What the product will be used for. Allowed values (keep as-is, they are matched against the commerce catalogue): 办公、游戏、差旅、居家、健身、通勤"
   product_budget:
     type: text
-    label: 预算上限
-    description: 用户能接受的价格上限，只取数字部分，例如“500”“500元以内”
+    label: budget cap
+    description: 'The highest price the user will accept. Only the digits matter, e.g. "500" or "under 500"'
   product_style:
     type: text
-    label: 风格偏好
-    description: 商品风格。可选值：极简、商务、电竞、北欧、运动
+    label: style preference
+    description: "Product style. Allowed values (keep as-is, they are matched against the commerce catalogue): 极简、商务、电竞、北欧、运动"
 
   refund_reason:
     type: text
-    label: 退款原因
-    description: 申请退款的原因
+    label: refund reason
+    description: Reason given for the refund request
 
 flows:
   onboarding:
-    name: 欢迎引导
-    description: 在聊天窗口初次打开时欢迎用户，并介绍助手可处理的电商服务。这个 flow 通常由系统主动触发。
+    name: welcome
+    description: Greet the user when the chat window first opens and introduce the e-commerce services this assistant can handle.
     steps:
       - id: start
         type: start
@@ -83,7 +90,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "你好，我是 Business Agent。我可以帮你查订单状态、查物流、了解商品信息，或者提交退款申请。"
+          text: "Hi, I'm Business Agent. I can check your order status, track shipments, look up product information, or file a refund request for you."
         next: end
 
       - id: end
@@ -91,8 +98,8 @@ flows:
         next: [ ]
 
   order_status_query:
-    name: 订单状态查询
-    description: 帮用户查询订单当前的处理状态，例如待付款、待发货、已发货或已完成。
+    name: order status lookup
+    description: Look up the current processing status of an order — for example awaiting payment, awaiting shipment, shipped or completed.
     steps:
       - id: start
         type: start
@@ -102,7 +109,7 @@ flows:
         type: collect
         slot_name: order_number
         response:
-          text: "请告诉我你的订单号。"
+          text: "What is your order number?"
 
         next: lookup_order_status
       - id: lookup_order_status
@@ -114,15 +121,15 @@ flows:
         type: action
         action: action_response
         args:
-          text: "订单{{ slots.order_number }}当前状态是：{{ slots.order_status }}。{{ slots.order_summary }}"
+          text: "Order {{ slots.order_number }} is currently: {{ slots.order_status }}. {{ slots.order_summary }}"
         next: end
       - id: end
         type: end
         next: [ ]
 
   logistics_tracking:
-    name: 物流查询
-    description: 帮用户查询订单物流进度、物流单号和配送公司信息。
+    name: shipment tracking
+    description: Look up an order's shipping progress, tracking number and carrier.
     steps:
       - id: start
         type: start
@@ -132,7 +139,7 @@ flows:
         type: collect
         slot_name: order_number
         response:
-          text: "请告诉我你的订单号。"
+          text: "What is your order number?"
         next: lookup_logistics
 
       - id: lookup_logistics
@@ -144,7 +151,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "订单{{ slots.order_number }}由{{ slots.logistics_company }}配送，物流单号是{{ slots.tracking_number }}。当前进度：{{ slots.logistics_status }}。{% if slots.logistics_traces %}\n\n物流轨迹：\n{{ slots.logistics_traces }}{% endif %}"
+          text: "Order {{ slots.order_number }} is being delivered by {{ slots.logistics_company }}, tracking number {{ slots.tracking_number }}. Current progress: {{ slots.logistics_status }}.{% if slots.logistics_traces %}\n\nTracking history:\n{{ slots.logistics_traces }}{% endif %}"
         next: end
 
       - id: end
@@ -152,8 +159,8 @@ flows:
         next: [ ]
 
   refund_request:
-    name: 退款申请
-    description: 帮用户提交简单的退款申请，收集订单号和退款原因。
+    name: refund request
+    description: File a simple refund request, collecting the order number and the reason for the refund.
     steps:
       - id: start
         type: start
@@ -163,21 +170,21 @@ flows:
         type: collect
         slot_name: order_number
         response:
-          text: "请告诉我你的订单号。"
+          text: "What is your order number?"
         next: ask_refund_reason
 
       - id: ask_refund_reason
         type: collect
         slot_name: refund_reason
         response:
-          text: "请简单说一下退款原因。"
+          text: "Could you tell me briefly why you want a refund?"
         next: refund_submitted
 
       - id: refund_submitted
         type: action
         action: action_response
         args:
-          text: "好的，订单{{ slots.order_number }}的退款申请已提交，原因是：{{ slots.refund_reason }}。后续会尽快为你处理。"
+          text: "Done — the refund request for order {{ slots.order_number }} has been submitted, reason: {{ slots.refund_reason }}. We will process it as soon as possible."
         next: end
 
 
@@ -186,20 +193,28 @@ flows:
         next: [ ]
 
   product_recommendation:
-    name: 商品推荐
-    description: 根据用户的用途、预算、风格等偏好，从商品目录里挑选并推荐商品。
+    name: product recommendation
+    description: Pick and recommend products from the catalogue based on the user's use case, budget and style preferences.
     steps:
       - id: start
         type: start
         next: ask_use_case
 
       # 三个收集步骤都挂了快捷回复：用户点一下就把值填回来，
-      # 不必自己敲。这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式
+      # 不必自己敲。这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式。
+      #
+      # **use_case 与 style 这两组按钮文案刻意保留中文**，与本次英语化不同步。
+      # 快捷回复的文案就是回传给规划器的用户输入，规划器把它原样填进槽位，
+      # 槽位值再直接送去中台做属性过滤——所以这些不是文案，是匹配键。
+      # 中台 24 件商品存的就是 "use_case": "办公"、"style": "极简"。
+      # 只翻按钮不改中台，点击后检索必然返回空列表，而空列表与「确实没有匹配
+      # 商品」在界面上无法区分，失败是静默的。
+      # 预算那组可以翻，因为 _parse_budget 只取数字部分，不做字符串匹配。
       - id: ask_use_case
         type: collect
         slot_name: product_use_case
         response:
-          text: "好的，我帮你挑。主要想用在什么场景？"
+          text: "Happy to help you pick. What will you mainly use it for?"
           suggestions: [ "办公", "游戏", "差旅", "居家" ]
         next: ask_budget
 
@@ -207,15 +222,15 @@ flows:
         type: collect
         slot_name: product_budget
         response:
-          text: "预算大概多少？"
-          suggestions: [ "300 以内", "500 以内", "1000 以内", "不限" ]
+          text: "What is your budget?"
+          suggestions: [ "Under 300", "Under 500", "Under 1000", "No limit" ]
         next: ask_style
 
       - id: ask_style
         type: collect
         slot_name: product_style
         response:
-          text: "喜欢什么风格？"
+          text: "Any style you prefer?"
           suggestions: [ "极简", "商务", "电竞", "北欧" ]
         next: recommend
 
@@ -253,8 +268,8 @@ flows:
         type: action
         action: action_response
         args:
-          text: "我们已经挑了几轮了。要是还没看到合适的，可以换个思路重新跟我说说需求，或者我帮你转人工。"
-          suggestions: [ "重新推荐", "转人工" ]
+          text: "We have been through a few rounds. If nothing here fits, tell me what you are after from a different angle, or I can hand you to a human agent."
+          suggestions: [ "Start over", "Talk to a human" ]
         next: end
 
       - id: end
@@ -262,8 +277,8 @@ flows:
         next: [ ]
 
   human_handoff:
-    name: 人工客服
-    description: 将当前对话转交给人工客服处理。
+    name: human agent
+    description: Hand the current conversation over to a human agent.
     steps:
       - id: start
         type: start
@@ -273,7 +288,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "好的，我来为你转接人工客服，请稍等。"
+          text: "Sure, I am transferring you to a human agent — one moment."
         next: end
 
       - id: end

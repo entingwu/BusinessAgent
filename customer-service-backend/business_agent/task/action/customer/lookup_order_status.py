@@ -24,8 +24,8 @@ class ActionLookupOrderStatus(Action):
 
     if payload is None:
       return ActionResult(updated_slots={
-        "order_status": "订单状态未知",
-        "order_summary": "暂时无法拿到该订单信息"
+        "order_status": "unknown",
+        "order_summary": "I could not retrieve this order right now."
       })
 
     # 3. 封装到ActionResult的slots中返回
@@ -39,14 +39,14 @@ class ActionLookupOrderStatus(Action):
   def _build_order_summary(self, payload: dict[str, Any]) -> str:
     parts = []
     if payload.get("amount"):
-      parts.append(f"订单金额 ￥{payload['amount']}")
+      parts.append(f"Order total ￥{payload['amount']}")
     items = payload.get("items") or []
 
     if items:
       titles = [str(item.get("title") or "").strip()
                 for item in items[:2] if item.get("title")]
       if titles:
-        parts.append("商品：" + "、".join(titles))
+        parts.append("Items: " + ", ".join(titles))
     # 中文行文统一用全角标点，原来用 ASCII 的 "." 和 "," 拼出来是
     # 「订单金额 ￥899.00.商品: 耳机.」这种半中半英的样子
     return "，".join(parts) + "。" if parts else ""

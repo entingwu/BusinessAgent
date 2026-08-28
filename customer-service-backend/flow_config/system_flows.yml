@@ -12,7 +12,7 @@ flows:
         action: action_response
         args:
           mode: static
-          text: "好的，我们先处理{{ context.started_flow_name }}。"
+          text: "Sure, let's start with {{ context.started_flow_name }}."
         next: end
 
       - id: end
@@ -30,7 +30,7 @@ flows:
       - id: ask
         type: action
         action: action_response
-        args: context.response   # text: "请告诉我你的订单号。" 请告诉我你的订单号---->前端展示[没关系：未来]
+        args: context.response   # text comes from context.response, e.g. "What is your order number?"
 
         next: listen
 
@@ -55,7 +55,7 @@ flows:
         action: action_response
         args:
           mode: static
-          text: "好的，我们继续刚才的{{ context.resumed_flow_name }}。"
+          text: "Alright, picking up where we left off with {{ context.resumed_flow_name }}."
         next: end
 
       - id: end
@@ -74,7 +74,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "当前没有找到可以继续的业务流程。你可以告诉我需要从头办理什么业务。"
+          text: "There is nothing in progress to pick up. Tell me what you would like to start and I will take it from the top."
         next: end
 
       - id: end
@@ -95,7 +95,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "当前没有正在办理的业务，不需要取消。你可以告诉我想查订单、查物流，还是申请退款。"
+          text: "Nothing is in progress, so there is nothing to cancel. I can check an order, track a shipment, or file a refund request."
         next: end
 
       - id: end
@@ -116,7 +116,7 @@ flows:
         action: action_response
         args:
           mode: static
-          text: "好的，我们先把{{ context.interrupted_flow_name }}放一放，先处理{{ context.started_flow_name }}。"
+          text: "Sure — let's put {{ context.interrupted_flow_name }} aside for now and handle {{ context.started_flow_name }} first."
         next: end
 
       - id: end
@@ -137,7 +137,7 @@ flows:
         action: action_response
         args:
           mode: static
-          text: "好的，{{ context.canceled_flow_name }}先帮你取消。"
+          text: "Done — I have cancelled {{ context.canceled_flow_name }} for you."
         next: end
 
       - id: end
@@ -162,16 +162,18 @@ flows:
         action: action_response
         args:
           mode: rephrase
-          text: "看来我刚才理解偏了。你可以重新说一下你想查订单、查物流，还是申请退款吗？"
+          text: "It looks like I misread that. Could you tell me again — do you want to check an order, track a shipment, or file a refund request?"
           prompt: |
-            你是一个中文电商客服助手，语气自然、友好、简洁。
-            请基于下面的建议回复，生成一句更自然的中文回复，保持原意，不要扩写。
-            对话上下文：
+            You are an e-commerce customer service assistant. Keep your tone natural, friendly and brief.
+            Rewrite the suggested reply below as one more natural sentence in English.
+            Keep the meaning, do not expand it, and always answer in English whatever language
+            the user wrote in.
+            Conversation context:
             {history}
-            用户最后一句：
-            用户：{user_message}
-            建议回复：{current_response}
-            改写后的回复：
+            User's latest message:
+            User: {user_message}
+            Suggested reply: {current_response}
+            Rewritten reply:
         next: end
 
       - id: not_supported
@@ -179,16 +181,18 @@ flows:
         action: action_response
         args:
           mode: rephrase
-          text: "我理解你的意思，不过这个能力目前还没有接入。"
+          text: "I understand what you are asking for, but that capability is not connected yet."
           prompt: |
-            你是一个中文电商客服助手，语气自然、友好、简洁。
-            请基于下面的建议回复，生成一句更自然的中文回复，保持原意，不要扩写。
-            对话上下文：
+            You are an e-commerce customer service assistant. Keep your tone natural, friendly and brief.
+            Rewrite the suggested reply below as one more natural sentence in English.
+            Keep the meaning, do not expand it, and always answer in English whatever language
+            the user wrote in.
+            Conversation context:
             {history}
-            用户最后一句：
-            用户：{user_message}
-            建议回复：{current_response}
-            改写后的回复：
+            User's latest message:
+            User: {user_message}
+            Suggested reply: {current_response}
+            Rewritten reply:
         next: end
 
       - id: ask_rephrase
@@ -196,16 +200,18 @@ flows:
         action: action_response
         args:
           mode: rephrase
-          text: "抱歉，我这边没有完全听明白。你可以再具体说一下你想处理什么电商问题吗？"
+          text: "Sorry, I did not quite follow. Could you be a bit more specific about the shopping issue you need help with?"
           prompt: |
-            你是一个中文电商客服助手，语气自然、友好、简洁。
-            请基于下面的建议回复，生成一句更自然的中文回复，保持原意，不要扩写。
-            对话上下文：
+            You are an e-commerce customer service assistant. Keep your tone natural, friendly and brief.
+            Rewrite the suggested reply below as one more natural sentence in English.
+            Keep the meaning, do not expand it, and always answer in English whatever language
+            the user wrote in.
+            Conversation context:
             {history}
-            用户最后一句：
-            用户：{user_message}
-            建议回复：{current_response}
-            改写后的回复：
+            User's latest message:
+            User: {user_message}
+            Suggested reply: {current_response}
+            Rewritten reply:
         next: end
 
       - id: end

@@ -1,26 +1,28 @@
-## 任务说明
-你的任务是分析当前对话上下文，并生成一个 TurnPlan JSON。
+## Your task
+Analyse the current conversation context and produce a TurnPlan JSON.
 
-TurnPlan 顶层只允许以下三个字段：
+The top level of a TurnPlan allows exactly these three fields:
 - `task`
 - `knowledge`
 - `chitchat`
 
-规则：
-- 这三个字段的值必须是 JSON 对象或null。
-- 请根据用户真实表达的意图生成结果。
-- 如果用户同时表达了多个意图，可以同时填写多个轨道。
-- 后续执行引擎一次只能处理一个轨道；如果你输出多个轨道，系统会再向用户澄清先处理哪一个。
-- 不要输出额外字段。
-- 只输出合法 JSON，不要输出 markdown。
-- 最终答案只能是 JSON 文本本身，不要使用 Markdown 代码块包裹，例如以三个反引号和 json 开头的结构。
+Rules:
+- Each of these fields must be a JSON object or null.
+- Produce the result from what the user actually expressed.
+- If the user expressed several intents at once, you may fill in several tracks.
+- The execution engine handles only one track per turn; if you output several, the system will ask
+  the user which one to handle first.
+- Do not output any other field.
+- Output valid JSON only, no markdown.
+- The final answer must be the JSON text itself. Do not wrap it in a markdown code block such as
+  one opening with three backticks followed by json.
 
 ---
 
-## Task 结构
-当用户是在办理业务时，填写 `task`：
+## Task structure
+Fill in `task` when the user is carrying out a business request.
 
-Task 对象示例：
+Example Task object:
 {
   "commands": [
     {"command": "start_flow", "flow": "<flow_id>"},
@@ -31,28 +33,39 @@ Task 对象示例：
   ]
 }
 
-仅允许以下 task commands：
+Only these task commands are allowed:
 - `start_flow`
 - `resume_flow`
 - `cancel_flow`
 - `set_slots`
 
-流程命令语义：
-- `start_flow`: 用户想表达非继续、接着、恢复刚才的业务”等全新的业务意图时使用，这是一开启业务流程指令
-- `resume_flow`：用户表达“继续、接着、恢复刚才的业务”等意图时使用；指定业务用 `flow`，未指定则省略 `flow`。
-槽位提取规则：
-- 每个 flow 的 `slots` 是该流程唯一允许使用的槽位清单；
-- `set_slots.slots` 的 key 必须从目标 flow 的 `slots` 中原样选择，禁止创造、改写或猜测其他 key。
-- 用户当前话语中只要明确给出了目标流程所需的槽位值，就必须输出 `set_slots`，不能因为同时输出了 `start_flow` 而省略。
-- 同一轮同时包含业务意图和槽位值时，先输出 `start_flow`，再输出一个 `set_slots`；
-多个已知槽位合并到同一个 `set_slots.slots` 对象。
-- 只提取用户明确表达的值，禁止臆造用户没有提供的槽位值。
-- **槽位值只能取自用户这一轮说的话**。历史对话里出现过的订单号、商品号一律不得搬到这一轮的槽位里——
-上一轮在查订单不代表这一轮的商品号就是那个订单号。这一轮没给值，就只输出 `start_flow`，不要凑一个 `set_slots`。
-- 反例：上一轮是“查订单 o30002 的物流”，这一轮用户说“看看类似的商品推荐”，
-正确输出只有 `start_flow`，**不能**输出 `{"command": "set_slots", "slots": {"product_id": "o30002"}}`——
-o30002 是订单号不是商品号，用户这一轮根本没说商品。
-- 示例：“我想查询订单A20260408001的物流信息”必须输出：
+Flow command semantics:
+- `start_flow`: use it when the user expresses a brand-new business intent — that is, anything
+  other than "continue", "go on", "pick up what we were doing". This is the command that opens a
+  business flow.
+- `resume_flow`: use it when the user says things like "continue", "go on", "pick up the earlier
+  request". Name the flow with `flow` when the user specified one; omit `flow` when they did not.
+
+Slot extraction rules:
+- Each flow's `slots` is the only list of slots that flow may use.
+- The keys of `set_slots.slots` must be taken verbatim from the target flow's `slots`. Never
+  invent, rewrite or guess a different key.
+- Whenever the user's current utterance clearly supplies a slot value the target flow needs, you
+  must output `set_slots`. Do not omit it just because you also output `start_flow`.
+- When a turn contains both a business intent and slot values, output `start_flow` first, then a
+  single `set_slots`; merge every known slot into that one `set_slots.slots` object.
+- Only extract values the user stated explicitly. Never fabricate a slot value the user did not
+  provide.
+- **Slot values may come only from what the user said in this turn.** An order number or product
+  ID that appeared earlier in the conversation must never be carried into this turn's slots — the
+  fact that the previous turn was about an order does not make this turn's product ID that order
+  number. If this turn supplies no value, output only `start_flow`; do not manufacture a
+  `set_slots`.
+- Counter-example: the previous turn was "track order o30002", and this turn the user says "show
+  me similar product recommendations". The correct output is `start_flow` alone, and it must
+  **not** include `{"command": "set_slots", "slots": {"product_id": "o30002"}}` — o30002 is an
+  order number, not a product ID, and the user said nothing about a product this turn.
+- Example: "I want to track the shipment for order A20260408001" must produce:
 {
     "commands":
             [
@@ -60,35 +73,41 @@ o30002 是订单号不是商品号，用户这一轮根本没说商品。
                 {"command": "set_slots", "slots": {"order_number": "A20260408001"}}
             ]
  }
-可用 flows：
+Available flows:
 {{ available_flows_json }}
 
 ---
 
-## Knowledge 结构
-当用户是在咨询信息时，填写 `knowledge`：
+## Knowledge structure
+Fill in `knowledge` when the user is asking for information.
 
-Knowledge 对象示例：
+Example Knowledge object:
 {
   "intents": ["<intent>"]
 }
 
-允许的 intent（从下列选项中选择，可以选择一个或多个）：
+Allowed intents (choose one or more from the list below):
 {{ knowledge_intents_json }}
 
 ---
 
-## Chitchat 结构
-当用户不是咨询信息或者办理业务时，请填写 `chitchat`：
+## Chitchat structure
+Fill in `chitchat` when the user is neither asking for information nor carrying out a business
+request.
 
-Chitchat 对象示例：
+This includes questions about **this assistant itself** — "what can you help me with", "what do
+you do", "are you a bot". Those are not knowledge questions: the knowledge base holds the
+merchant's policies, not a description of this assistant, so routing them to `knowledge` produces
+a retrieval miss and the user is told their very first question cannot be answered.
+
+Example Chitchat object:
 {
-  "chat": "用户的问题"
+  "chat": "the user's message"
  }
 
 ---
 
-## 当前状态
+## Current state
 
 ### Active Task
 {{ active_task_json }}
@@ -101,16 +120,16 @@ Chitchat 对象示例：
 
 ---
 
-## 对话历史
+## Conversation history
 {{ current_conversation }}
 
 ---
 
-## 当前任务
-请根据用户最后一句话生成 TurnPlan：
+## Now
+Produce the TurnPlan for the user's latest message:
 """{{ user_message }}"""
 
-TurnPlan 只允许输出以下形状：
+A TurnPlan may only take this shape:
 
 {
   "task": null,
@@ -118,8 +137,9 @@ TurnPlan 只允许输出以下形状：
   "chitchat": null
 }
 
-请根据用户真实意图，把对应字段替换成对象；没有命中的字段保持 null。
+Replace the matching field with an object based on the user's real intent; leave the fields that
+do not apply as null.
 
-不要输出解释。
-不要使用 markdown 代码块。
-你的 TurnPlan：
+Do not output explanations.
+Do not use markdown code blocks.
+Your TurnPlan:

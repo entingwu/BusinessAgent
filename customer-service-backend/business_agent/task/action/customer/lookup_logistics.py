@@ -31,18 +31,18 @@ class ActionLookupLogistics(Action):
     # 3. 封装到ActionResult的slots中返回
     if payload is None:
         return ActionResult(updated_slots={
-            "tracking_number": "未知",
-            "logistics_company": "未知",
-            "logistics_status": "暂时无法查到物流信息，请稍后再试",
+            "tracking_number": "unknown",
+            "logistics_company": "unknown",
+            "logistics_status": "I could not retrieve the shipping information right now — please try again shortly",
             "logistics_traces": "",
         })
 
     return ActionResult(updated_slots={
-        "tracking_number": payload.get("tracking_number") or "未知",
-        "logistics_company": payload.get("logistics_company") or "未知",
+        "tracking_number": payload.get("tracking_number") or "unknown",
+        "logistics_company": payload.get("logistics_company") or "unknown",
         # 中台的 status_desc 本身以句号结尾，而模板也会补一个，直接拼会出现「。。」。
         # 在写入槽位时统一去掉句尾标点，句号交给模板加
-        "logistics_status": (payload.get("status_desc") or payload.get("status") or "未知").rstrip("。."),
+        "logistics_status": (payload.get("status_desc") or payload.get("status") or "unknown").rstrip("。."),
         "logistics_traces": self._build_traces(payload.get("traces")),
     })
 

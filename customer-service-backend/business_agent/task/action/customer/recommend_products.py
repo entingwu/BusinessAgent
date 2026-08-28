@@ -29,9 +29,15 @@ SLOT_TO_ATTR: dict[str, str] = {
 MAX_CARDS = 4
 
 # 收敛按钮的候选值。给值不给维度名——见 user_flows.yml 里 wait_more 的注释。
-# 值取自槽位 description 里列的可选值，规划器认得
+# 值取自槽位 description 里列的可选值，规划器认得。
+#
+# STYLE_VALUES **刻意保持中文**，没有随界面一起英语化：这些值会被原样填进
+# product_style 槽位、再送去中台做属性过滤，中台存的就是 "style": "极简"。
+# 翻了这里而不改中台种子数据，点击后必然检索为空——而空结果与「确实没有匹配
+# 商品」在界面上无法区分，失败是静默的。要动它得四处同步改，是单独一档的活。
+# BUDGET_VALUES 可以翻，因为 _parse_budget 只抽数字、不做字符串匹配。
 STYLE_VALUES = ("极简", "商务", "电竞", "北欧")
-BUDGET_VALUES = ("300 以内", "500 以内", "1000 以内")
+BUDGET_VALUES = ("Under 300", "Under 500", "Under 1000")
 
 
 class ActionRecommendProducts(Action):
@@ -79,8 +85,9 @@ class ActionRecommendProducts(Action):
       # 正是 user_flows.yml 那条「回路要有出口」想防的情况
       return ActionResult(
         messages=[BotMessage(
-          text="商品服务暂时没有响应，我这边查不了。你可以稍后再问一次，或者让我帮你转人工。",
-          suggestions=["稍后再试", "转人工"],
+          text="The product service is not responding right now, so I cannot look this up. "
+               "You can ask me again shortly, or I can hand you to a human agent.",
+          suggestions=["Try again later", "Talk to a human"],
         )],
         updated_slots={"product_round": self._next_round(slots)},
       )
@@ -129,7 +136,7 @@ class ActionRecommendProducts(Action):
     if tighter:
       suggestions.append(tighter)
 
-    suggestions.append("不用了")
+    suggestions.append("No thanks")
     return suggestions
 
   def _to_card(self, item: dict[str, Any]) -> FocusedObject:
@@ -179,17 +186,18 @@ class ActionRecommendProducts(Action):
 
   def _headline(self, attrs: dict[str, str], max_price: float | None, *, shown: int, total: int) -> str:
     condition = self._condition_text(attrs, max_price)
-    more = f"（共 {total} 款，先给你看 {shown} 款）" if total > shown else ""
-    return f"为你找到{condition}的商品{more}："
+    more = f" ({total} in total, showing {shown})" if total > shown else ""
+    return f"Here is what I found {condition}{more}:"
 
   def _no_match_text(self, attrs: dict[str, str], max_price: float | None) -> str:
     # 3.3.3「无匹配时如实告知，不编造商品」
-    return (f"没有找到{self._condition_text(attrs, max_price)}的商品。"
-            "要不要放宽一下预算，或者换个风格看看？")
+    return (f"I could not find any products {self._condition_text(attrs, max_price)}. "
+            "Want to raise the budget, or try a different style?")
 
   def _condition_text(self, attrs: dict[str, str], max_price: float | None) -> str:
-    labels = {"use_case": "用途", "style": "风格", "size": "尺码"}
-    parts = [f"{labels.get(key, key)}是{value}" for key, value in attrs.items()]
+    # 标签用英文，值仍是中台存的中文（见 STYLE_VALUES 上方注释）
+    labels = {"use_case": "use case", "style": "style", "size": "size"}
+    parts = [f"{labels.get(key, key)} {value}" for key, value in attrs.items()]
     if max_price is not None:
-      parts.append(f"{max_price:.0f} 元以内")
-    return "、".join(parts) if parts else "符合条件"
+      parts.append(f"under {max_price:.0f}")
+    return "for " + ", ".join(parts) if parts else "matching your request"
