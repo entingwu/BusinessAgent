@@ -1,35 +1,35 @@
-# 配送政策
+# Shipping policy
 
-## 发货时效
+## How soon orders ship
 
-现货商品在消费者付款后四十八小时内发出，节假日与大促期间顺延，具体以商品详情页标注的发货时效为准。预售商品按详情页承诺的预售发货时间发出。
+Items in stock ship within forty-eight hours of payment. Public holidays and major sale periods push this out, and the dispatch time shown on the product detail page is what applies. Pre-order items ship on the pre-order date promised on that page.
 
-若商家未按时发货，消费者可以在订单详情页提交催发货申请，也可以申请取消订单并全额退款。
+If the merchant misses the dispatch deadline, you can submit a shipping reminder on the order detail page, or cancel the order for a full refund.
 
-## 配送范围
+## Where we deliver
 
-支持中国大陆地区配送。港澳台地区、海外地区暂不支持直邮。部分偏远地区因承运商网络限制无法送达，下单时系统会提示不可配送。
+We ship within mainland China. Direct shipping to Hong Kong, Macau, Taiwan and overseas is not available at the moment. Some remote areas cannot be reached because of carrier network limits, and the system will tell you at checkout when an address cannot be delivered to.
 
-大件商品与特殊品类可能需要指定承运商配送，下单时以结算页展示的可选配送方式为准。
+Bulky items and certain categories may have to go with a specific carrier; the delivery options shown at checkout are the ones available for your order.
 
-## 配送方式与配送时长
+## Delivery methods and how long delivery takes
 
-默认使用快递配送，由系统按收货地址自动分配承运商。发出后的在途时长通常为：
+Orders go by courier by default, and the carrier is assigned automatically from your delivery address. Typical times in transit once shipped:
 
-- 同城与周边省份：一到两天
-- 跨省普通地区：两到四天
-- 偏远地区与海岛：四到七天
+- Same city and neighbouring provinces: one to two days
+- Ordinary destinations in other provinces: two to four days
+- Remote areas and islands: four to seven days
 
-以上为参考时长，遇到极端天气、交通管制、疫情管控等不可抗力会延长。
+These are guidelines. Extreme weather, traffic restrictions, epidemic controls and other events outside our control will extend them.
 
-## 签收与验货
+## Accepting and inspecting a delivery
 
-建议消费者当面验货后再签收。发现外包装严重破损、包裹重量明显异常的，可以拒收并联系客服。签收后发现商品破损的，请在签收后四十八小时内提交带外包装的照片与开箱视频，便于责任判定。
+We recommend inspecting a parcel before accepting it. If the outer packaging is badly damaged, or the weight is obviously wrong, you can refuse delivery and contact support. If you find the item damaged after accepting it, send us photos of the outer packaging and an unboxing video within forty-eight hours of delivery so responsibility can be established.
 
-## 物流异常处理
+## When something goes wrong in transit
 
-物流轨迹超过五天没有更新，或者显示已签收但本人未收到的，请联系客服发起物流查询。查询期间订单的自动确认收货时间会相应延长。确认包裹丢失的，商家按补发或退款处理，由消费者选择。
+If tracking has not updated for more than five days, or it says delivered and you have not received anything, contact support to open a trace. The automatic order-completion deadline is extended while the trace is open. If the parcel is confirmed lost, the merchant will either send a replacement or refund you — your choice.
 
-## 修改收货地址
+## Changing the delivery address
 
-订单在未发货状态下可以自助修改一次收货地址，且只能在同一配送范围内修改。已发货订单无法修改地址，可以联系承运商申请中途改派，改派产生的费用由消费者承担。
+While an order is unshipped you can change the delivery address yourself once, and only to an address in the same delivery region. The address cannot be changed after an order ships; you can ask the carrier to redirect it in transit, and you pay any redirection fee.

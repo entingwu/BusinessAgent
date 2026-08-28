@@ -1,29 +1,29 @@
-# 平台规则
+# Platform rules
 
-## 账号与实名
+## Accounts and identity verification
 
-一名消费者只能注册一个主账号。下单收货人信息需真实有效。涉及跨境商品的订单，海关要求下单人与支付人实名信息一致，否则清关会失败并退回。
+Each customer may register one main account. Recipient details on an order must be genuine. For cross-border orders, customs requires the person who placed the order and the person who paid to match on their verified identity, otherwise the shipment fails clearance and is returned.
 
-账号出借、批量注册、使用脚本抢购的行为属于违规，平台可对相关订单做取消处理。
+Lending an account to someone else, registering accounts in bulk, and using scripts to snap up stock all breach the rules, and the platform may cancel the orders involved.
 
-## 评价规则
+## Reviews
 
-订单完成后可以在评价有效期内发布评价。评价内容不得包含辱骂、人身攻击、涉政涉黄内容、无关广告与联系方式。违规评价会被隐藏。
+You can leave a review within the review window after an order completes. Reviews may not contain abuse, personal attacks, political or adult content, unrelated advertising or contact details. Reviews that break these rules are hidden.
 
-追加评价与晒图不影响首次评价的时效判定。评价一经发布不支持自行删除，可以联系客服申请修改。
+Follow-up reviews and photo reviews do not affect the timing of the original review. A published review cannot be deleted by you; contact support if you need it changed.
 
-## 价格保护
+## Price protection
 
-商品在消费者下单后的价保有效期内出现直接降价的，可以申请一次价格保护，补差金额退回原支付账户。以下情况不在价保范围：使用优惠券、限时秒杀、拼团、以旧换新等活动导致的价格差异，以及不同规格、不同商家、不同渠道之间的价格差异。价保有效期以商品详情页标注为准。
+If an item's price is cut outright within the price-protection window after you order it, you can claim price protection once, and the difference goes back to the account you paid from. Price protection does not cover: differences arising from coupons, flash sales, group buys, trade-ins and similar promotions, or differences between variants, merchants or sales channels. The length of the window is stated on the product detail page.
 
-## 违规行为与处理
+## Rule breaches and what happens
 
-恶意退货、调包退货、虚假交易、滥用售后权益的行为，平台会限制相关账号的售后权益，情节严重的会关闭账号交易功能。
+Abusive returns, returns where the item has been swapped, fake transactions and abuse of after-sales rights will lead to the platform restricting the after-sales rights on the account, and in serious cases to the account losing the ability to transact.
 
-## 投诉与举报
+## Complaints
 
-对商家服务、商品质量、物流服务有异议的，可以在订单详情页发起投诉。平台会在受理后介入核实，核实周期通常为三到七个工作日。
+If you are unhappy with a merchant's service, the quality of an item or the delivery service, you can file a complaint from the order detail page. The platform investigates once the complaint is accepted, which usually takes three to seven working days.
 
-## 售后争议处理
+## After-sales disputes
 
-消费者与商家协商不成的，任意一方都可以申请平台介入。平台介入后会依据订单信息、聊天记录、物流凭证与商品实物凭证做出判定。对判定结果有异议的，可以在结果公布后的申诉期内提交新的证据申请复核。
+If you and the merchant cannot reach agreement, either side can ask the platform to step in. The platform decides on the basis of the order record, the chat history, delivery evidence and evidence about the item itself. If you disagree with the decision, you can submit new evidence and ask for a review within the appeal window after it is announced.

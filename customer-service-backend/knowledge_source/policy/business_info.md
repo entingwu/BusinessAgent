@@ -1,45 +1,51 @@
-# 商家基础信息
+# Merchant information
 
-## 营业时间与客服服务时间
+## Do you have a physical store or any offline shops
 
-本平台是线上商城，没有实体店，也没有线下门店或对外开放的营业场所，因此不存在门店开门与关门时间。商城全天开放，随时可以下单；这里说的营业时间指的是能不能找到人工客服。
+This platform is an online-only shop. There is no physical store, no offline shop, no concession counter and no premises open to the public, so in-store pickup, in-store returns and in-store try-ons are not available. Ordering, after-sales support and returns all happen online, and returns go to the warehouse address shown on the page once your after-sales request is approved.
 
-在线客服（智能助手）全天二十四小时可用。
+Because there are no stores, there are no store opening and closing hours either. The shop itself is open around the clock and you can order at any time.
 
-人工客服的服务时间为每日九点至二十一点，法定节假日照常提供服务。人工客服下班期间提交的会话会保留在队列中，次日九点起按提交顺序依次处理。
+## Opening hours and support hours
 
-售后工单的受理时间以工单提交时间为准，不受人工客服在线时段限制。
+"Opening hours" here means when you can reach a human agent. It has nothing to do with stores.
 
-## 客服联系方式
+The online assistant is available twenty-four hours a day.
 
-- 在线客服：在订单详情页或商品详情页点击「联系客服」进入，也可以直接在对话中说明需要人工协助
-- 客服热线：400-820-1688，服务时间与人工客服一致
-- 客服邮箱：support@example-mall.com，通常在一个工作日内回复
+Human agents are available from 9am to 9pm every day, including public holidays. Conversations submitted while they are offline stay in the queue and are handled in order from 9am the next day.
 
-紧急问题（例如收到破损商品、收到与订单不符的商品）建议优先使用在线客服，可以直接上传照片，处理更快。
+After-sales tickets are timestamped when you submit them, and are not limited to the hours when human agents are online.
 
-## 办公与退货地址
+## How to reach support
 
-公司办公地址：上海市浦东新区世纪大道 100 号 32 层。办公地址不接收退货包裹。
+- Online support: tap "Contact support" on the order detail page or the product detail page, or simply say in the chat that you would like a human agent
+- Support line: 400-820-1688, open the same hours as human agents
+- Support email: support@example-mall.com, usually answered within one working day
 
-退货收件地址不是固定的一个：不同商品由不同仓库发出，退货地址以售后申请通过后系统在页面上显示的地址为准。请勿自行寄回到办公地址或历史订单里的旧地址，自寄到错误地址导致包裹丢失的，平台无法认定为已退货。
+For urgent problems — a damaged item, or an item that does not match the order — online support is the faster route, because you can upload photos directly.
 
-## 支持的支付方式
+## Office address and return address
 
-下单结算时可选的支付方式：
+Company office: Floor 32, 100 Century Avenue, Pudong New Area, Shanghai. The office does not accept return parcels.
 
-- 余额支付
-- 微信支付
-- 支付宝支付
-- 银行卡支付
-- 信用卡支付
+There is no single return address: different items ship from different warehouses, and the address that counts is the one shown on the page after your after-sales request is approved. Do not send items back to the office address or to an address from an older order — if a parcel sent to the wrong address goes missing, the platform cannot treat it as returned.
 
-部分促销活动或跨境商品会限制可用的支付方式，以结算页实际展示的选项为准。
+## Payment methods
 
-退款一律原路返回到付款时使用的账户，不支持更换到其他账户，各渠道的退款到账时长见退款政策。
+Payment options available at checkout:
 
-## 发票
+- Account balance
+- WeChat Pay
+- Alipay
+- Debit card
+- Credit card
 
-支持开具电子普通发票与电子专用发票。在订单完成后于订单详情页提交开票申请，电子发票通常在三个工作日内开出并发送到申请时填写的邮箱。
+Some promotions and cross-border items restrict which methods can be used; the options shown on the checkout page are the ones that apply.
 
-发票抬头与税号提交后不支持自行修改，需要重开的请联系客服作废后重新开具。已经发生退款的订单不予开票，部分退款的订单按实际支付金额开具。
+Refunds always go back to the account used to pay, and cannot be redirected to a different account. How long each channel takes is covered in the refund policy.
+
+## Invoices
+
+Electronic general invoices and electronic special invoices are both available. Submit an invoice request on the order detail page after the order completes; the electronic invoice is usually issued within three working days and sent to the email address you gave on the request.
+
+The invoice title and tax number cannot be edited once submitted — contact support to void the invoice and reissue it. Orders that have been refunded cannot be invoiced; partially refunded orders are invoiced for the amount actually paid.

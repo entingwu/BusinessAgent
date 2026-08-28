@@ -8,14 +8,36 @@ Merchant knowledge documents that get indexed into the vector store. Read by the
 | `faq/` | `faq` | One chunk per entry — no semantic splitting |
 | `policy/` | `document` | `RecursiveCharacterTextSplitter`, recursive on `\n## / \n### / \n\n / 。` |
 
-## The content stays Chinese — deliberately
+## The content is English, and changing it invalidates the thresholds
 
 The files under `faq/` and `policy/` are the retrieval corpus, not documentation.
-They are written in Chinese because users ask in Chinese, the agent answers in
-Chinese, and **`KNOWLEDGE_SCORE_THRESHOLD=0.58` was calibrated against this
-Chinese corpus**. Translating the corpus would degrade cross-lingual similarity
-and invalidate the threshold in one move. If you ever do translate it, re-run
-`-m business_agent.knowledge.ingest calibrate` and treat the old threshold as void.
+They were Chinese until 2026-08-28 and are now English, matching the UI and the
+agent's replies.
+
+**Editing this corpus — translating it, restructuring it, or even re-titling a
+section — shifts the whole score distribution and voids the calibrated
+thresholds.** After any change here:
+
+```bash
+uv run python -m business_agent.knowledge.ingest ingest --force
+uv run python -m business_agent.knowledge.ingest calibrate
+```
+
+and set the value `calibrate` prints. Nothing errors if you skip this; retrieval
+simply mis-gates, which looks like an empty knowledge base or like the assistant
+answering things it should not.
+
+Two thresholds exist and they are on different scales — do not copy one into the
+other:
+
+| Key | Scale | When it gates |
+|---|---|---|
+| `RERANK_SCORE_MIN` | rerank relevance, ~0.0–0.9 | normal operation, when rerank is up |
+| `KNOWLEDGE_SCORE_THRESHOLD` | vector cosine, ~0.5–0.8 | only on the degraded path, when rerank is down |
+
+`calibrate` reports against whichever scoring is currently active, so read
+`RERANK_ENABLED` before believing its number applies to the key you are about to
+edit. Deriving the vector-scale value means running it with `RERANK_ENABLED=false`.
 
 This README is developer-facing, so it is in English.
 

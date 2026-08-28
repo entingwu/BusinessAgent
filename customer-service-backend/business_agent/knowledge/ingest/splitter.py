@@ -135,22 +135,17 @@ def embedding_text(chunk: PreparedChunk) -> str:
     added here (「退货政策」, 「配送政策」) to bring the document-topic layer of context into the
     match.
 
-  Measured during calibration (34 samples, see knowledge_eval/calibration_set.jsonl; reproduce
-  with `python -m business_agent.knowledge.ingest calibrate`):
+  The numbers that used to sit here — a table of 0.5858 / 0.5518 / 0.5773 / 0.5605 / 0.6030
+  leading to KNOWLEDGE_SCORE_THRESHOLD=0.58 — were measured on the Chinese corpus with
+  text-embedding-v3. Both the corpus and the embedding model have changed since, so they are
+  gone rather than left to be read as current. What survives is the shape of the finding, which
+  is model-independent: a shared prefix across every chunk of one source raises that source's
+  baseline similarity to any short query and can close the separable range outright.
 
-    | scheme                          | lowest score with answer | highest without (outliers removed) |
-    |----------------------------|-------------|------------------------------|
-    | title + body (the old way)      | 0.5858                   | 0.5518                             |
-    | body only                       | 0.5773                   | 0.5605                             |
-    | source name + body (current)    | 0.6030                   | 0.5605                             |
-
-  The current scheme's separable range is (0.5605, 0.6030), whose midpoint gives
-  KNOWLEDGE_SCORE_THRESHOLD=0.58.
-  Reverting to "title + body" squeezes the range to (0.5518, 0.5858), which puts 0.58 inside the
-  answerable set — a batch of questions that should be answered would start falling back instead.
-
-  So: **changing this function means re-running calibrate and re-deriving the threshold.** The two
-  are bound together.
+  So: **changing this function means re-running `ingest --force` and then `calibrate`, and
+  setting whatever it prints.** The two are bound together. Note that calibrate reports against
+  whichever scoring is active — deriving the vector-scale KNOWLEDGE_SCORE_THRESHOLD means running
+  it with RERANK_ENABLED=false.
 
   Args:
       chunk

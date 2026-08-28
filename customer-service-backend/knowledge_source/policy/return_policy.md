@@ -1,41 +1,41 @@
-# 退货政策
+# Return policy
 
-## 七天无理由退货范围
+## What the 7-day no-questions-asked return covers
 
-自签收之日起七天内，商品保持完好、不影响二次销售的，可以申请七天无理由退货。七天从物流系统显示的签收当日次日零时开始计算，最后一天为节假日的顺延至节假日结束后的第一个工作日。
+You can request a 7-day no-questions-asked return within seven days of delivery, provided the item is still in good condition and fit for resale. The seven days start at midnight on the day after the logistics system records delivery. If the last day falls on a public holiday, it moves to the first working day after the holiday ends.
 
-## 什么算商品保持完好（吊牌、包装、配件）
+## What counts as "in good condition" (tags, packaging, accessories)
 
-商品保持完好指商品本身、配件、赠品、说明书、保修卡、包装盒齐全，商品未经使用、未产生磨损与污渍，吊牌与防伪标识未被剪除或损坏。
+In good condition means the item itself, its accessories, any free gifts, the manual, the warranty card and the box are all present; the item is unused, unworn and unstained; and the price tag and anti-counterfeit label have not been cut off or damaged.
 
-吊牌被剪除或损坏的商品不符合「商品保持完好」的要求，不能申请七天无理由退货；因商品质量问题退货的不受此限制。
+An item whose tag has been cut off or damaged does not meet the "in good condition" requirement and cannot be returned under the 7-day no-questions-asked rule. Returns for a quality defect are not subject to this restriction.
 
-## 不支持七天无理由退货的商品
+## Items the 7-day no-questions-asked return does not cover
 
-以下类别经消费者在下单时确认后，不适用七天无理由退货：
+The following categories are excluded once you confirm this at checkout:
 
-- 消费者定制类商品，包括刻字、改尺寸、按图案定制的商品
-- 鲜活易腐类商品，包括生鲜、鲜花、活体
-- 在线下载或者消费者拆封的音像制品、计算机软件等数字化商品
-- 交付的报纸、期刊
-- 拆封后易影响人身安全或者生命健康、容易导致商品品质发生改变的商品，例如贴身内衣、化妆品、口服食品
+- Made-to-order items, including anything engraved, resized or customised to a supplied design
+- Perishable and live goods, including fresh food, flowers and live animals
+- Digital goods that have been downloaded or unsealed, such as audio, video and computer software
+- Newspapers and periodicals already delivered
+- Items that, once unsealed, could affect personal safety or health, or whose quality changes readily — for example underwear, cosmetics and food taken orally
 
-对于上述商品，若存在质量问题，仍然适用质量问题退换货。
+If any of the above turns out to be defective, the quality-defect return and exchange rules still apply.
 
-## 退货申请流程
+## How to file a return
 
-1. 在订单详情页选择「申请售后」，选择「我要退货退款」
-2. 填写退货原因并上传必要凭证，质量问题需上传商品瑕疵照片
-3. 等待客服审核，审核结果会以站内消息通知
-4. 审核通过后按页面提示的退货地址寄回商品，并回填快递单号
-5. 商家签收并验收无误后进入退款流程
+1. On the order detail page choose "Request after-sales support", then "Return and refund"
+2. Give the reason for the return and upload any supporting evidence; a quality complaint needs photos of the defect
+3. Wait for support to review it — you will be notified of the outcome by in-app message
+4. Once approved, ship the item to the return address shown on the page and enter the tracking number
+5. The merchant refunds you after receiving and inspecting the item
 
-未回填快递单号的退货申请，系统会在超时后自动关闭，需要重新发起申请。
+A return request with no tracking number entered closes automatically once it times out, and has to be filed again.
 
-## 退货运费由谁承担
+## Who pays return shipping
 
-七天无理由退货的往返运费由消费者承担。因商品质量问题、商家错发漏发、商品与描述不符导致的退货，往返运费由商家承担，消费者可在售后单中提交运费凭证申请报销。
+For a 7-day no-questions-asked return, you pay the shipping both ways. Where the return is caused by a quality defect, by the merchant shipping the wrong or an incomplete order, or by the item not matching its description, the merchant pays both ways, and you can claim the cost back by submitting the shipping receipt on the after-sales ticket.
 
-## 退货商品状态要求
+## Condition the returned item must be in
 
-退回的商品需要与申请时描述一致。出现商品缺件、人为损坏、使用痕迹明显、包装严重破损影响二次销售的情况，商家有权拒收或与消费者协商折价退款。协商不成的可以发起平台介入。
+The item you send back has to match how you described it when you filed the request. If parts are missing, if there is damage you caused, if it shows obvious signs of use, or if the packaging is damaged badly enough to prevent resale, the merchant may refuse delivery or negotiate a partial refund with you. If you cannot agree, you can escalate to the platform.

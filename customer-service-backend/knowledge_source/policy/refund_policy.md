@@ -1,35 +1,35 @@
-# 退款政策
+# Refund policy
 
-## 退款申请入口
+## Where to request a refund
 
-在订单详情页选择「申请售后」即可发起退款。未发货的订单可以直接申请「仅退款」；已发货的订单需要走「退货退款」，商品寄回并验收通过后才会退款。
+Choose "Request after-sales support" on the order detail page to start a refund. An order that has not shipped can go straight to "Refund only"; an order that has already shipped has to go through "Return and refund", and the refund is issued once the item has been sent back and inspected.
 
-## 退款到账时效
+## How long a refund takes to arrive
 
-商家确认退款后，平台会在一个工作日内发起退款指令。退款原路返回到消费者的付款账户，到账时间取决于支付渠道：
+After the merchant approves the refund, the platform issues the refund instruction within one working day. The money goes back to the account you paid from, and how long it takes depends on the payment channel:
 
-- 余额支付：实时到账
-- 微信支付、支付宝支付：一到三个工作日
-- 银行卡与信用卡支付：三到十五个工作日，具体以发卡行处理时间为准
+- Balance: instant
+- WeChat Pay and Alipay: one to three working days
+- Debit and credit cards: three to fifteen working days, depending on how quickly your issuing bank processes it
 
-超出上述时效仍未到账的，请提供退款单号联系客服核查。
+If it still has not arrived after that, contact support with your refund reference number and we will look into it.
 
-## 未发货订单的退款
+## Refunds on orders that have not shipped
 
-未发货订单申请仅退款的，商家需在约定时限内处理。商家逾期未处理的，系统自动同意退款。若商品在申请期间已发出，退款申请会被驳回，需要改走退货退款流程。
+For a refund-only request on an unshipped order, the merchant has to respond within the agreed window. If they miss it, the system approves the refund automatically. If the item ships while the request is open, the request is rejected and you need to switch to the return-and-refund process instead.
 
-## 已发货订单的退款
+## Refunds on orders that have shipped
 
-已发货订单需先完成退货。商品签收验收无误后进入退款流程。若消费者拒收包裹，包裹退回商家并签收后同样进入退款流程，但拒收产生的运费按退货运费规则承担。
+An order that has shipped has to be returned first. The refund starts once the item has been received and inspected. If you refuse delivery, the refund also starts once the parcel makes it back to the merchant and is signed for, but the shipping cost of the refused delivery is settled under the return shipping rules.
 
-## 部分退款与差额退款
+## Partial refunds and price-difference refunds
 
-订单中部分商品退货的，按该商品实付金额退款。使用优惠券的订单，优惠金额按商品实付比例分摊，退款金额以订单详情页的实付金额为准，不含已核销且不可退的权益。
+If you return part of an order, you are refunded what you actually paid for that item. On orders that used a coupon, the discount is apportioned across items in proportion to what you paid, and the refund is based on the amount paid shown on the order detail page, excluding any benefit already redeemed and non-refundable.
 
-## 退款失败的常见原因
+## Common reasons a refund fails
 
-- 付款账户已注销或状态异常
-- 银行卡挂失、冻结或超过有效期
-- 支付渠道当日额度受限
+- The account you paid from has been closed or is in an abnormal state
+- The card has been reported lost, frozen, or has expired
+- The payment channel has hit a daily limit
 
-遇到退款失败，系统会重试一次，仍失败的会转为人工处理并联系消费者补充收款信息。
+When a refund fails the system retries once. If it fails again it is passed to a human agent, who will contact you for alternative payment details.

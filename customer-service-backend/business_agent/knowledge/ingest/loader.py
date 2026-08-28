@@ -156,26 +156,27 @@ def _load_csv(file_path: Path) -> tuple[str, list[SourceEntry]]:
     reader = csv.DictReader(handle)
     for row in reader:
       normalized = {(key or "").strip().lower(): (value or "").strip() for key, value in row.items()}
-      # The Chinese column names and the 「问：」/「答：」 wording below are **deliberately not
-      # englishified**. They are not display text — they decide what the chunk body looks like,
-      # and the chunk body is what gets embedded. KNOWLEDGE_SCORE_THRESHOLD=0.58 was calibrated
-      # against exactly this wording (see the note on embedding_text() in splitter.py), so
-      # changing it silently invalidates the threshold: retrieval keeps working, the scores just
-      # shift, and questions that used to be answered start hitting the fallback.
-      # The Chinese header names are also what the shipped CSV actually uses.
-      # Changing any of this means re-running `ingest --force` and `calibrate`.
+      # The wording below is not display text: it decides what the chunk body looks like, and the
+      # chunk body is what gets embedded. The similarity threshold is calibrated against exactly
+      # this wording (see the note on embedding_text() in splitter.py), so changing it silently
+      # invalidates the threshold — retrieval keeps working, the scores just shift, and questions
+      # that used to be answered start hitting the fallback.
+      # **Changing any of this means re-running `ingest --force` and `calibrate`.**
+      #
+      # The Chinese column names are kept as fallbacks so a Chinese-authored CSV still loads; the
+      # shipped corpus uses the English headers.
       question = normalized.get("question") or normalized.get("问题") or ""
       answer = normalized.get("answer") or normalized.get("答案") or ""
       category = normalized.get("category") or normalized.get("分类") or ""
 
       if question or answer:
-        title = f"常见问题：{question}" if question else f"常见问题 条目 {len(entries) + 1}"
-        lines = [f"问：{question}", f"答：{answer}"]
+        title = f"FAQ: {question}" if question else f"FAQ entry {len(entries) + 1}"
+        lines = [f"Q: {question}", f"A: {answer}"]
         if category:
-          lines.append(f"分类：{category}")
+          lines.append(f"Category: {category}")
         text = "\n".join(lines)
       else:
-        title = f"条目 {len(entries) + 1}"
+        title = f"Entry {len(entries) + 1}"
         text = "\n".join(f"{key}：{value}" for key, value in normalized.items() if value)
 
       entries.append(SourceEntry(title=title, text=text))

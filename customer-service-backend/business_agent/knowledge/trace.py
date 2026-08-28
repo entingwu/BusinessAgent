@@ -118,7 +118,7 @@ class KnowledgeTraceRecorder:
       # Record the threshold that actually gated this turn, not a fixed one. When rerank is on
       # the gate is rerank_score_min and the score column holds rerank scores; writing
       # knowledge_score_threshold here would put two different scales in adjacent columns
-      # (e.g. "score 0.9513 / threshold 0.58") and mislead anyone reading the table later.
+      # (e.g. "score 0.9513 / threshold the configured threshold") and mislead anyone reading the table later.
       "threshold": settings.rerank_score_min if settings.rerank_enabled else settings.knowledge_score_threshold,
       "embedding_model": get_embedding_backend().name,
     }

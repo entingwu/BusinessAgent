@@ -88,7 +88,7 @@ npm install && npm run dev                    # http://127.0.0.1:5174
    uv run python -m business_agent.knowledge.ingest stats
    ```
 
-   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (45 / 45 today). This check exists because the metadata lives in the shared MySQL container while the index is local — it has already caught one case where another branch's ingest rewrote the shared table with a different embedding model, leaving everyone else's index silently mismatched. If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
+   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (53 / 53 today; the number moves whenever the corpus changes, so compare the two figures rather than either against a remembered constant). This check exists because the metadata lives in the shared MySQL container while the index is local — it has already caught one case where another branch's ingest rewrote the shared table with a different embedding model, leaving everyone else's index silently mismatched. If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
 
 4. **Query them with `--default-character-set=utf8mb4`.** Without it the MySQL client renders `source_title` and the Chinese corpus as `?????`. The data is fine — the columns are `utf8mb4` — but the symptom looks exactly like a broken ingest, and it is easy to spend a round debugging the embedding pipeline over a client setting:
 
@@ -108,7 +108,7 @@ nothing beyond an API key; the second is what the RAG rebuild delivered.
 |---|---|---|
 | Embedding | hosted `text-embedding-v3`, dense only | local BGE-M3, dense + sparse |
 | Retrieval | cosine Top-K + threshold | hybrid search + rerank + LangGraph |
-| Gate | vector score, 0.58 | rerank relevance score, 0.155 |
+| Gate | vector score (`KNOWLEDGE_SCORE_THRESHOLD`) | rerank relevance (`RERANK_SCORE_MIN`), with the vector score as the degraded-path fallback |
 | Query latency | 0.68–0.85s | ~2.1s (rerank round-trip is 94% of it) |
 | Extra setup | none | ~2GB of deps, three containers, a 2.3GB model |
 
@@ -195,7 +195,9 @@ Understanding one user message requires reading across `api/` → `services/` �
 
   The RAG path: `knowledge/ingest/` loads Markdown / TXT / CSV from `knowledge_source/`, splits (recursive separators for prose, one-chunk-per-entry for FAQ and CSV), embeds via DashScope `text-embedding-v3` and writes both the vectors (Chroma, through the four methods on `infrastructure/vector_client.py`) and the metadata (`repository/knowledge_repository.py`). At query time `KnowledgeRetriever` applies Top-K plus a cosine threshold and **returns an empty list on a miss** — the fallback wording is the responder's decision, not the provider's. `KnowledgeResponder` then sorts by score, trims to the token budget, and labels each chunk with its source in the prompt. Three paths never reach the LLM at all: a miss, a low-similarity result, and a vector-store/embedding outage all return constant text, so they cannot fabricate (spec 5.2, 验收 3). Every retrieval — hit, miss or outage — is written to `retrieval_traces` keyed by turn, and logged under the `business_agent.knowledge` logger.
 
-  **The similarity threshold is calibrated, not arbitrary.** `KNOWLEDGE_SCORE_THRESHOLD` is 0.58, not the 0.35 in the spec's table: `text-embedding-v3` scores run high enough that 0.35 filters almost nothing. Re-calibrate with `-m business_agent.knowledge.ingest calibrate` against `knowledge_eval/calibration_set.jsonl` after changing the embedding model **or the chunking** — `knowledge/ingest/splitter.py` documents how the FAQ prefix once collapsed the separable range.
+  **The similarity thresholds are calibrated, not arbitrary, and there are two of them on different scales.** `RERANK_SCORE_MIN` gates normal operation; `KNOWLEDGE_SCORE_THRESHOLD` is a *vector cosine* value that fires only on the degraded path, when rerank is down. Rerank relevance and vector cosine differ by roughly 4x, so copying one into the other silently disarms the gate it lands in — that mistake was made and caught on 2026-08-28, and `knowledge/graph.py` carries the mirror-image warning in `node_threshold`.
+
+  Re-calibrate with `-m business_agent.knowledge.ingest calibrate` against `knowledge_eval/calibration_set.jsonl` after changing the embedding model, **the chunking, or the corpus** — englishifying the corpus voided both previously calibrated values. Note that `calibrate` reports against whichever scoring is currently active, so deriving the vector-scale value means running it with `RERANK_ENABLED=false`. `knowledge/ingest/splitter.py` documents how a shared FAQ prefix once collapsed the separable range.
 - **Chitchat** (`chitchat/`) — LLM free-form reply.
 
 ### Flows are configuration, not code

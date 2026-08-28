@@ -34,6 +34,9 @@ if [[ "${1:-}" == "--revert" ]]; then
   set_key VECTOR_BACKEND chroma
   set_key EMBEDDING_BACKEND dashscope
   set_key EMBEDDING_MODEL text-embedding-v3
+  # Vector-score gate for the Chroma + text-embedding-v3 chain. 0.58 was calibrated when the
+  # corpus was Chinese; the corpus is English now and this value has NOT been re-derived for it.
+  # Run `ingest --force` then `calibrate` after reverting and use what it prints.
   set_key KNOWLEDGE_SCORE_THRESHOLD 0.58
   set_key RERANK_ENABLED false
   set_key KNOWLEDGE_GRAPH_ENABLED false
@@ -97,8 +100,17 @@ else
   set_key EMBEDDING_DEVICE cpu; echo "    no Metal backend — using cpu"
 fi
 set_key RERANK_ENABLED true
-set_key RERANK_SCORE_MIN 0.155          # calibrated on 35 zh + 22 en cases; see RAG_ref.md
-set_key KNOWLEDGE_SCORE_THRESHOLD 0.7225  # vector-score gate, used only if rerank is down
+# Rerank relevance gate — this is the one that actually fires while rerank is up.
+# Calibrated on 35 zh + 22 en cases against the **Chinese** corpus (see RAG_ref.md). The corpus
+# was englishified on 2026-08-28 and this value was not re-derived; it still separates on the
+# current calibration set, but its stated provenance no longer matches the corpus.
+set_key RERANK_SCORE_MIN 0.155
+# Vector-score gate, used only when rerank is down. Re-derived 2026-08-28 against the English
+# corpus with RERANK_ENABLED=false: answerable 26/29, unanswerable 8/8 correctly rejected.
+# It is deliberately strict — on the degraded path, refusing to answer beats guessing, which is
+# the same reason node_threshold falls back to the vector threshold rather than reusing the
+# rerank one. Do not copy a rerank-scale number here; the scales differ by roughly 4x.
+set_key KNOWLEDGE_SCORE_THRESHOLD 0.75
 set_key KNOWLEDGE_GRAPH_ENABLED true
 set_key KNOWLEDGE_DATABASE_URL "$KNOWLEDGE_DB"
 echo "    .env updated"
