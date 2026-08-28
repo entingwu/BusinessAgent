@@ -2,7 +2,6 @@
 Define Router
 """
 
-from pydantic import BaseModel
 import uuid
 from fastapi import APIRouter
 
@@ -20,27 +19,6 @@ def hello_endpoint():
   API request handle layer: Deserialize the json string from frontend as defined data model object.
   """
   return {"success": "ok"}
-
-class User(BaseModel):
-  name: str
-  age: int
-  address: str
-
-@router.get("/test", response_model=User)
-def test_endpoint():
-  """
-  response_model:
-  1. used for Evaluator
-  2. used for Filter
-  3. Generated comprehensive API doc.
-  Returns:
-  """
-  return {
-    "name": "zs",
-    "age": "18",
-    "address": "sz",
-    "card_no": "xxx"
-  }
 
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(chat_request: ChatRequest, service: DialogueStateServiceDep):
