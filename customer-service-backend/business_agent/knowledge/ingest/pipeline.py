@@ -86,7 +86,13 @@ class IngestPipeline:
         continue
 
       previous_hash = await repository.get_source_hash(source.source_id)
-      if not force and previous_hash == source.content_hash:
+      # Rows written before the relative-path change store an absolute path. content_hash has not
+      # changed, so the plain skip would leave new code running against old data — and nothing
+      # would warn about it. Detect the stale format and re-ingest that source automatically,
+      # rather than documenting "remember to run --force after merging".
+      previous_path = await repository.get_source_file_path(source.source_id)
+      stale_path_format = bool(previous_path) and Path(previous_path).is_absolute()
+      if not force and previous_hash == source.content_hash and not stale_path_format:
         report.results.append(SourceResult(
           source_id=source.source_id,
           source_type=source.source_type,

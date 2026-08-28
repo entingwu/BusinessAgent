@@ -258,6 +258,19 @@ class KnowledgeRepository:
     )
     return cursor.scalar_one_or_none()
 
+  async def get_source_file_path(self, source_id: str) -> str | None:
+    """
+    Goal: read the stored file_path so ingest can tell whether a row predates the
+          relative-path change. An absolute path means the row was written by the old code.
+    Args:
+        source_id
+    Returns: str | None
+    """
+    cursor = await self._session.execute(
+      select(KnowledgeSourceRecord.file_path).where(KnowledgeSourceRecord.source_id == source_id)
+    )
+    return cursor.scalar_one_or_none()
+
   async def list_sources(self) -> list[SourceSummary]:
     """
     Goal: list every knowledge source
