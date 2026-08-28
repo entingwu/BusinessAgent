@@ -42,6 +42,10 @@ class ActionRecommendProducts(Action):
   reads = (
     SlotSpec(name="product_use_case", required=False, description="使用场景，映射到中台的 use_case 属性过滤"),
     SlotSpec(name="product_style", required=False, description="风格偏好，映射到中台的 style 属性过滤"),
+    # product_size 目前没有任何 collect 步骤收集它，但 SLOT_TO_ATTR 的循环确实会读，
+    # 一旦有值就会实质改变检索结果（实测传「大号」返回 5 款）。
+    # reads 的意义是「让依赖哪些槽位成为可读取的事实」，漏掉一个正在生效的槽位，这个事实就是错的
+    SlotSpec(name="product_size", required=False, description="尺码，映射到中台的 size 属性过滤"),
     SlotSpec(name="product_budget", required=False, description="预算上限，解析出数字后作为 max_price"),
     SlotSpec(name="product_round", required=False, description="第几轮收敛，用于生成不重复的快捷回复"),
   )

@@ -57,7 +57,8 @@ class Order(Base):
     receiver_address: Mapped[str] = mapped_column(String(255))
     delivery_method: Mapped[str] = mapped_column(String(32), default="标准配送")
     # 幂等键：同一个 key 重复下单只产生一笔订单，重复请求原样返回首次的结果。
-    # collation 在 DDL 里定为 utf8mb4_bin——表默认的 ci 会让大小写/尾空格不同的两个键互相吞掉
+    # collation 在 DDL 里定为 utf8mb4_0900_bin。不能用 utf8mb4_bin——它区分大小写
+    # 但仍是 PAD SPACE，尾空格不同的两个键照样撞车；只有 UCA 9.0 那套是 NO PAD
     idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     # 请求指纹：同一个键换了内容时用来识别，返回 409 而不是静默给旧单
     request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)

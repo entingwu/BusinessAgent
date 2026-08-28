@@ -201,14 +201,20 @@ def _mask_phone(phone: str) -> str:
 def _request_fingerprint(body: CreateOrderRequest) -> str:
     """
     Goal: 为下单请求算一个内容指纹，用来识别「同一个幂等键换了内容」
-    只覆盖决定这笔订单是什么的字段：买了什么、买多少、寄给谁、怎么配送。
+    覆盖决定这笔订单是什么的全部字段：**谁下的**、买了什么、买多少、寄给谁、怎么配送。
     同一 SKU 拆多行与调换顺序会算出同一个指纹——那本来就是同一笔订单。
+
+    user_id 必须在里面。幂等键的唯一索引是全局的、不按用户隔离，
+    所以漏掉下单人会开出一条跨用户串单的路径：另一个用户用同样的 key 和同样的购物车
+    下单，会拿到别人的订单号并被告知这是自己的「重复提交」，
+    再用那个订单号查详情就能看到别人的收件人、手机与完整地址。
     """
     merged: dict[str, int] = {}
     for item in body.items:
         merged[item.product_id] = merged.get(item.product_id, 0) + item.quantity
     payload = json.dumps(
         {
+            "user_id": body.user_id,
             "items": sorted(merged.items()),
             "receiver_name": body.receiver_name,
             "receiver_phone": body.receiver_phone,
@@ -555,9 +561,11 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         if existing.request_fingerprint and existing.request_fingerprint != fingerprint:
             raise HTTPException(
                 status_code=409,
+                # 不回显既有订单号：指纹不匹配意味着这个 key 可能属于另一个用户，
+                # 把订单号写进错误信息等于把别人的订单号交出去
                 detail=(
-                    f"幂等键 {body.idempotency_key} 已用于订单 {existing.order_id}，"
-                    "但本次请求的商品或收货信息与那一笔不同。购物车变了请换一个幂等键。"
+                    f"幂等键 {body.idempotency_key} 已被一笔内容不同的订单占用。"
+                    "下单人、商品或收货信息有任何变化都请换一个幂等键。"
                 ),
             )
         return _wrap(_build_create_order_result(existing, replay=True))
@@ -662,8 +670,8 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"幂等键 {body.idempotency_key} 已用于订单 {winner.order_id}，"
-                    "但本次请求的商品或收货信息与那一笔不同。购物车变了请换一个幂等键。"
+                    f"幂等键 {body.idempotency_key} 已被一笔内容不同的订单占用。"
+                    "下单人、商品或收货信息有任何变化都请换一个幂等键。"
                 ),
             )
         return _wrap(_build_create_order_result(winner, replay=True))
