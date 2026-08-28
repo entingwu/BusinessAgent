@@ -11,7 +11,7 @@ from typing import Any
 
 from business_agent.domain.messages import BotMessage, FocusedObject
 from business_agent.domain.state import DialogueState
-from business_agent.task.action.base import Action, ActionResult
+from business_agent.task.action.base import Action, ActionResult, SlotSpec
 from business_agent.task.action.customer.shared import search_products
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,18 @@ BUDGET_VALUES = ("300 以内", "500 以内", "1000 以内")
 
 class ActionRecommendProducts(Action):
   name = "action_recommend_products"
+  description = "按用途、预算、风格三个偏好维度检索中台商品，返回商品卡片与收敛用的快捷回复"
+  # 三个偏好槽位都不是必需的：缺哪个就少一个过滤条件，仍然能给出候选。
+  # 标成必需会让用户说「随便推荐点」时流程卡住
+  reads = (
+    SlotSpec(name="product_use_case", required=False, description="使用场景，映射到中台的 use_case 属性过滤"),
+    SlotSpec(name="product_style", required=False, description="风格偏好，映射到中台的 style 属性过滤"),
+    SlotSpec(name="product_budget", required=False, description="预算上限，解析出数字后作为 max_price"),
+    SlotSpec(name="product_round", required=False, description="第几轮收敛，用于生成不重复的快捷回复"),
+  )
+  writes = ("product_round",)
+  # 只读检索中台，不改变任何业务状态
+  is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """
