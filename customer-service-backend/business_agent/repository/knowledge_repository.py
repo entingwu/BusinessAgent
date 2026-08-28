@@ -345,16 +345,16 @@ class KnowledgeRepository:
 
 
 async def main_test():
-  from business_agent.infrastructure import db_client
+  from business_agent.infrastructure import knowledge_db
 
-  db_client.init_db_engine()
-  await ensure_tables(db_client.session_engine)
-  async with db_client.session_factory() as session:
+  from business_agent.infrastructure.knowledge_db import get_knowledge_engine, get_knowledge_session_factory
+  await ensure_tables(get_knowledge_engine())
+  async with get_knowledge_session_factory()() as session:
     repository = KnowledgeRepository(session)
     for summary in await repository.list_sources():
       print(summary.to_dict())
     print(f"chunks={await repository.count_chunks()}")
-  await db_client.dispose_engine()
+  await knowledge_db.dispose()
 
 
 if __name__ == '__main__':

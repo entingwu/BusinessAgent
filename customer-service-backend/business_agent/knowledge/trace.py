@@ -23,7 +23,7 @@ from typing import Any, Iterable
 
 from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
-from business_agent.infrastructure import db_client
+from business_agent.infrastructure.knowledge_db import get_knowledge_engine, get_knowledge_session_factory
 from business_agent.infrastructure.embedding import get_embedding_backend
 from business_agent.knowledge.provider.provider import KnowledgeChunk
 from business_agent.repository.knowledge_repository import KnowledgeRepository, ensure_tables
@@ -168,17 +168,17 @@ class KnowledgeTraceRecorder:
     """
     global _tables_ready
 
-    if db_client.session_factory is None:
+    if get_knowledge_session_factory() is None:
       logger.warning("retrieval_trace_skipped reason=db_not_initialized rows=%s", len(rows))
       return 0
 
     # The server process never runs the ingest script, so the tables may not exist yet — create
     # them once per process here
     if not _tables_ready:
-      await ensure_tables(db_client.session_engine)
+      await ensure_tables(get_knowledge_engine())
       _tables_ready = True
 
-    async with db_client.session_factory() as session:
+    async with get_knowledge_session_factory()() as session:
       repository = KnowledgeRepository(session)
       written = await repository.record_retrieval_traces(rows)
       await repository.commit()

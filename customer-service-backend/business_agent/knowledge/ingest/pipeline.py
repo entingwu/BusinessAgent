@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from business_agent.config.settings import settings
-from business_agent.infrastructure import db_client
+from business_agent.infrastructure import knowledge_db
 from business_agent.infrastructure.embedding import get_embedding_backend
 from business_agent.infrastructure.vector_client import ChromaVectorClient, VectorRecord, get_vector_client
 from business_agent.knowledge.ingest.loader import LoadedSource, discover_files, load_source
@@ -202,13 +202,12 @@ async def run_with_repository(handler):
       handler: an async callable that receives a KnowledgeRepository
   Returns: whatever handler returned
   """
-  db_client.init_db_engine()
-  await ensure_tables(db_client.session_engine)
+  await ensure_tables(knowledge_db.get_knowledge_engine())
   try:
-    async with db_client.session_factory() as session:
+    async with knowledge_db.get_knowledge_session_factory()() as session:
       return await handler(KnowledgeRepository(session))
   finally:
-    await db_client.dispose_engine()
+    await knowledge_db.dispose()
 
 
 async def main_test():

@@ -75,6 +75,14 @@ class Settings(BaseSettings):
   knowledge_graph_enabled: bool
   knowledge_context_max_tokens: int     # cap on the total length of chunks put into the prompt
 
+  # Dedicated connection for knowledge metadata. Empty = use DATABASE_URL (main's behaviour).
+  # A branch that changes the embedding model or the vector store MUST point this at its own
+  # database: the vector index is a local gitignored directory while the metadata lives in the
+  # shared MySQL, so sharing it makes the "vector_chunks == metadata_chunks" acceptance check
+  # fail for everyone else — for reasons unrelated to their own environment.
+  # Full rationale in infrastructure/knowledge_db.py
+  knowledge_database_url: str = ""
+
   knowledge_log_level: str              # log level for the knowledge package; retrieval traces depend on it
   knowledge_trace_enabled: bool         # whether to write each turn's hits and similarities to retrieval_traces
 
