@@ -69,6 +69,12 @@ class KnowledgeRetriever:
 
     filters = {"source_type": list(source_types)} if source_types else None
 
+    # 图开启时把整条检索委托给 LangGraph。分歧只在这一处，
+    # Provider 与其以上完全不感知——图是实现细节不是接口。
+    if settings.knowledge_graph_enabled:
+      return await self._retrieve_via_graph(
+        query_text, filters, effective_top_k, effective_threshold, provider_id)
+
     try:
       embedded = await get_embedding_backend().embed_query(query_text)
       # sparse 只有 bge_m3 后端产出；给了就走混合检索，没给就退化为纯 dense。
@@ -156,6 +162,29 @@ class KnowledgeRetriever:
       len(chunks), len(rejected),
       [chunk.trace() for chunk in chunks],
       rejected,
+    )
+    return chunks
+
+
+  async def _retrieve_via_graph(self, query_text, filters, top_k, threshold, provider_id):
+    """
+    Goal: 走 LangGraph 编排的检索。与函数式那条产出相同的 list[KnowledgeChunk]。
+    Raises: KnowledgeUnavailableError 图判定为 unavailable 时抛出，让上层照旧降级
+    """
+    from business_agent.knowledge.graph import OUTCOME_UNAVAILABLE, get_knowledge_graph
+
+    source_types = (filters or {}).get("source_type")
+    state = await get_knowledge_graph().run(query_text, source_types)
+    if state.get("outcome") == OUTCOME_UNAVAILABLE:
+      error = state.get("error", "knowledge graph reported unavailable")
+      logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
+      raise KnowledgeUnavailableError(error)
+
+    chunks = [_to_chunk(match, provider_id) for match in (state.get("selected") or [])]
+    logger.info(
+      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=graph outcome=%s hits=%s traces=%s",
+      query_text, filters, top_k, state.get("outcome"), len(chunks),
+      [chunk.trace() for chunk in chunks],
     )
     return chunks
 

@@ -67,6 +67,12 @@ class Settings(BaseSettings):
   # so it is off by default; the code stays because the graph's fan-out needs a second path.
   hyde_enabled: bool
   hyde_weight: float                    # weight of the HyDE path in RRF; the direct path is always 1.0
+
+  # Orchestrate retrieval with LangGraph. Both implementations produce the same results; the
+  # difference is how "fallback never calls the LLM" is guaranteed — the function path relies on
+  # an if-return mid-function, the graph on topology: node_fallback / node_degrade do not route
+  # to node_answer, which you can confirm by looking at the graph rather than reading the code.
+  knowledge_graph_enabled: bool
   knowledge_context_max_tokens: int     # cap on the total length of chunks put into the prompt
 
   knowledge_log_level: str              # log level for the knowledge package; retrieval traces depend on it
