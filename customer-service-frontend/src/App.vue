@@ -62,40 +62,28 @@ const userProfile = {
 }
 
 /* ── 控制台导航（附录 D.3）──────────────────────────────────
-   「对话」是唯一已实现的页面；其余三项属于第二/第三档，
-   这里只做占位入口：可见、可点、点了显示「敬请期待」。 */
+   三项都是已实现的能力，各自有真页面：对话、知识库（只读）、接管台。
+   原来的「技能」入口已删除——技能指令注入在第二档裁剪时被砍掉，
+   留着等于指向一个不会来的东西。 */
 const NAV_ITEMS = [
   {
     key: 'chat',
     label: 'Chat',
-    ready: true,
     icon: 'M10 2C5.6 2 2 5.1 2 8.9c0 2.2 1.2 4.1 3 5.3V18l2.9-1.6c.7.2 1.4.2 2.1.2 4.4 0 8-3.1 8-6.9S14.4 2 10 2z',
   },
   {
     key: 'knowledge',
     label: 'Knowledge',
-    ready: false,
     icon: 'M4 3h4.5A2.5 2.5 0 0 1 11 5.5V17a2.5 2.5 0 0 0-2.5-2H4V3zm12 0h-4.5A2.5 2.5 0 0 0 9 5.5V17a2.5 2.5 0 0 1 2.5-2H16V3z',
-  },
-  {
-    key: 'skills',
-    label: 'Skills',
-    ready: false,
-    icon: 'M11 2 4 11h4l-1 7 7-9h-4l1-7z',
   },
   {
     key: 'handover',
     label: 'Handoff',
-    ready: false,
     icon: 'M10 2a7 7 0 0 0-7 7v5a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1H5V9a5 5 0 0 1 10 0v1h-1a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h1a2 2 0 0 0 2-2V9a7 7 0 0 0-7-7z',
   },
 ]
 
 const activeNav = ref('chat')
-
-const activeNavItem = computed(
-  () => NAV_ITEMS.find((item) => item.key === activeNav.value) ?? NAV_ITEMS[0]
-)
 
 /* 调试开关（附录 D.5）：恢复完整 Turn 卡片。默认关闭。 */
 const showTurnCards = ref(false)
@@ -105,17 +93,21 @@ const CONTROL_OWNERS = {
   AGENT: {
     label: 'Agent handling',
     tone: 'control-agent',
+    // notice 显示在聊天窗，写给访客；console 显示在接管台，写给客服
     notice: '',
+    console: 'The Agent is answering. No human agent is attached to this session.',
   },
   PENDING_HUMAN: {
     label: 'Waiting for a human agent',
     tone: 'control-pending',
     notice: 'Handed off to a human agent. You can keep sending messages while you wait.',
+    console: 'Queued for a human agent. The Agent is still answering — claim the session to stop it.',
   },
   HUMAN: {
     label: 'Human agent handling',
     tone: 'control-human',
     notice: 'A human agent has taken over this conversation. Input is locked until they reply.',
+    console: 'A human agent owns this session. The Agent has stopped answering and the visitor input is locked.',
   },
 }
 
@@ -657,8 +649,201 @@ async function sendProduct(product) {
   await sendPayload({ object: card })
 }
 
+/* FastAPI 的 detail 可能是字符串, 也可能是校验错误列表。
+   只认字符串, 否则会把 [object Object] 印到界面上。 */
+function detailMessage(payload, fallback) {
+  const detail = payload?.detail
+  return typeof detail === 'string' && detail ? detail : fallback
+}
+
+/* ── 知识库控制台 (只读) ──────────────────────────────────── */
+const knowledgeStats = ref(null)
+const knowledgeStatsError = ref('')
+const isLoadingKnowledgeStats = ref(false)
+
+const probeText = ref('')
+const probeResult = ref(null)
+const probeError = ref('')
+const isProbing = ref(false)
+
+/* 索引建没建好, 这个项目只有一个判据: 向量库分片数必须等于元数据分片数。
+   两个数来自两处独立事实(本地向量库 / 共享元数据库), 所以并排显示两个数,
+   不归约成一个对勾——不等的时候要能看出是哪一侧短了。 */
+const indexConsistent = computed(() => {
+  const stats = knowledgeStats.value
+  return Boolean(stats) && stats.vector_chunks === stats.metadata_chunks
+})
+
+async function fetchKnowledgeStats() {
+  if (isLoadingKnowledgeStats.value) {
+    return
+  }
+  isLoadingKnowledgeStats.value = true
+  knowledgeStatsError.value = ''
+  try {
+    const response = await fetch('/api/knowledge/stats')
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(detailMessage(data, 'Failed to load the knowledge stats.'))
+    }
+    knowledgeStats.value = data
+  } catch (error) {
+    knowledgeStats.value = null
+    knowledgeStatsError.value =
+      error instanceof Error ? error.message : 'Failed to load the knowledge stats.'
+  } finally {
+    isLoadingKnowledgeStats.value = false
+  }
+}
+
+/* 检索探针: 只跑检索, 不调 LLM。
+   它把「检索没找到」和「检索找到了但模型答得不好」分开——这两件事在聊天
+   窗口里看起来一模一样, 修法完全不同。 */
+async function runProbe() {
+  const text = probeText.value.trim()
+  if (!text || isProbing.value) {
+    return
+  }
+  isProbing.value = true
+  probeError.value = ''
+  try {
+    const response = await fetch('/api/knowledge/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(detailMessage(data, 'The retrieval probe failed.'))
+    }
+    probeResult.value = data
+  } catch (error) {
+    probeResult.value = null
+    probeError.value = error instanceof Error ? error.message : 'The retrieval probe failed.'
+  } finally {
+    isProbing.value = false
+  }
+}
+
+function probeChunkKey(chunk, index) {
+  return chunk?.chunk_id || `chunk-${index}`
+}
+
+/* 后端把摘要截到 200 字符, 断点常在词中间。补省略号, 否则看起来像分片存坏了。 */
+const PROBE_EXCERPT_LIMIT = 200
+
+function probeExcerpt(chunk) {
+  const excerpt = chunk?.excerpt ?? ''
+  return excerpt.length >= PROBE_EXCERPT_LIMIT ? `${excerpt}…` : excerpt
+}
+
+function formatScore(score) {
+  const numeric = Number(score)
+  return Number.isNaN(numeric) ? '—' : numeric.toFixed(4)
+}
+
+/* ── 接管台 ───────────────────────────────────────────────── */
+/* 接管台查的会话不一定是聊天窗当前那个, 所以 sender_id 独立一份。 */
+const handoffSenderId = ref(senderId.value)
+const handoffReason = ref('')
+const handoffState = ref(null)
+const handoffError = ref('')
+const isLoadingHandoff = ref(false)
+const isSubmittingHandoff = ref(false)
+
+const handoffOwnerMeta = computed(
+  () => CONTROL_OWNERS[normalizeControlOwner(handoffState.value?.control_owner)]
+)
+
+const handoffSlotEntries = computed(() => {
+  const slots = handoffState.value?.slots
+  if (!slots || typeof slots !== 'object') {
+    return []
+  }
+  return Object.entries(slots).map(([key, value]) => ({ key, value: String(value) }))
+})
+
+/* 接管台改的是同一个会话。如果改的正好是聊天窗当前的 sender_id,
+   顺手把聊天窗的控制权同步过去, 否则两个页面会显示互相矛盾的状态。 */
+function syncChatControlOwner(target, payload) {
+  if (target === senderId.value.trim()) {
+    applyControlOwner(payload)
+  }
+}
+
+async function fetchHandoffState() {
+  const target = handoffSenderId.value.trim()
+  handoffError.value = ''
+  if (!target) {
+    handoffState.value = null
+    handoffError.value = 'Enter a sender_id first.'
+    return
+  }
+
+  isLoadingHandoff.value = true
+  try {
+    const response = await fetch(`/api/session/state?sender_id=${encodeURIComponent(target)}`)
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(detailMessage(data, 'Failed to load the session state.'))
+    }
+    handoffState.value = data
+    syncChatControlOwner(target, data)
+  } catch (error) {
+    handoffState.value = null
+    handoffError.value =
+      error instanceof Error ? error.message : 'Failed to load the session state.'
+  } finally {
+    isLoadingHandoff.value = false
+  }
+}
+
+async function submitHandoff(action) {
+  const target = handoffSenderId.value.trim()
+  handoffError.value = ''
+  if (!target) {
+    handoffError.value = 'Enter a sender_id first.'
+    return
+  }
+  if (isSubmittingHandoff.value) {
+    return
+  }
+
+  isSubmittingHandoff.value = true
+  try {
+    const response = await fetch('/api/handoff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_id: target, action, reason: handoffReason.value.trim() }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(detailMessage(data, `The ${action} request failed.`))
+    }
+    handoffState.value = data
+    syncChatControlOwner(target, data)
+  } catch (error) {
+    handoffError.value = error instanceof Error ? error.message : `The ${action} request failed.`
+  } finally {
+    isSubmittingHandoff.value = false
+  }
+}
+
 function selectNav(item) {
   activeNav.value = item.key
+
+  // 进页面才拉数据: 只看聊天的人不该为另外两个页面付请求
+  if (item.key === 'knowledge' && knowledgeStats.value === null) {
+    fetchKnowledgeStats()
+  }
+  if (item.key === 'handover') {
+    if (!handoffSenderId.value.trim()) {
+      handoffSenderId.value = senderId.value.trim()
+    }
+    if (handoffState.value === null) {
+      fetchHandoffState()
+    }
+  }
 }
 
 watch(
@@ -697,7 +882,7 @@ async function copyText(text, key) {
 
 <template>
   <div class="app-shell">
-    <div class="workspace">
+    <div class="workspace" :class="{ 'workspace-wide': activeNav !== 'chat' }">
       <!-- 左栏: 控制台导航 (附录 D.3) -->
       <nav class="console-nav">
         <div class="nav-brand">
@@ -717,7 +902,6 @@ async function copyText(text, key) {
                 <path :d="item.icon" fill="currentColor" />
               </svg>
               <span class="nav-item-label">{{ item.label }}</span>
-              <span v-if="!item.ready" class="nav-item-tag">Soon</span>
             </button>
           </li>
         </ul>
@@ -916,24 +1100,314 @@ async function copyText(text, key) {
         </form>
       </section>
 
-      <!-- 中栏占位: 后续档位的页面入口 -->
-      <section v-if="activeNav !== 'chat'" class="chat-card">
+      <!-- 中栏: 知识库控制台 (只读) -->
+      <section v-if="activeNav === 'knowledge'" class="chat-card console-page">
         <header class="chat-header">
-          <h1 class="placeholder-title">{{ activeNavItem.label }}</h1>
-        </header>
-        <div class="placeholder-body">
-          <p class="placeholder-headline">Coming soon</p>
-          <p class="placeholder-text">
-            {{ activeNavItem.label }} belongs to a later delivery tier. This is a placeholder entry point.
-          </p>
-          <button type="button" class="secondary-button" @click="activeNav = 'chat'">
-            Back to chat
+          <div class="console-heading">
+            <h1 class="console-title">Knowledge base</h1>
+            <p class="console-subtitle">
+              Read-only. Ingesting re-embeds every chunk and rewrites the shared index, so it stays
+              a deliberate CLI command.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="secondary-button"
+            :disabled="isLoadingKnowledgeStats"
+            @click="fetchKnowledgeStats"
+          >
+            {{ isLoadingKnowledgeStats ? 'Loading…' : 'Refresh' }}
           </button>
+        </header>
+
+        <div class="console-body">
+          <p v-if="knowledgeStatsError" class="console-error">{{ knowledgeStatsError }}</p>
+          <p v-else-if="!knowledgeStats" class="console-hint">Loading the index status…</p>
+
+          <template v-if="knowledgeStats">
+            <!-- 索引状态: 两个数并排, 不等则标红 -->
+            <section class="console-block">
+              <h2 class="console-block-title">Index status</h2>
+              <div class="index-status" :class="indexConsistent ? 'index-ok' : 'index-mismatch'">
+                <div class="index-figure">
+                  <span class="index-number">{{ knowledgeStats.vector_chunks }}</span>
+                  <span class="index-caption">vector_chunks</span>
+                  <span class="index-source">vector store</span>
+                </div>
+                <span class="index-operator">{{ indexConsistent ? '=' : '≠' }}</span>
+                <div class="index-figure">
+                  <span class="index-number">{{ knowledgeStats.metadata_chunks }}</span>
+                  <span class="index-caption">metadata_chunks</span>
+                  <span class="index-source">metadata database</span>
+                </div>
+                <span class="status-badge" :class="indexConsistent ? 'status-success' : 'status-danger'">
+                  {{ indexConsistent ? 'Index built' : 'Index not built' }}
+                </span>
+              </div>
+              <p class="console-note">
+                These two counts come from two independent places — the local vector store and the
+                shared metadata database. They must agree. When they do not, the index is not built,
+                whatever the last ingest reported: re-run
+                <code>ingest --force</code> and check the counts again.
+              </p>
+            </section>
+
+            <!-- 当前配置 -->
+            <section class="console-block">
+              <h2 class="console-block-title">Retrieval configuration</h2>
+              <dl class="config-grid">
+                <div class="config-item">
+                  <dt>Vector backend</dt>
+                  <dd>{{ knowledgeStats.vector_backend }}</dd>
+                </div>
+                <div class="config-item">
+                  <dt>Embedding backend</dt>
+                  <dd>{{ knowledgeStats.embedding_backend }}</dd>
+                </div>
+                <div class="config-item">
+                  <dt>Embedding model</dt>
+                  <dd>{{ knowledgeStats.embedding_model }}</dd>
+                </div>
+                <div class="config-item">
+                  <dt>Top-K</dt>
+                  <dd>{{ knowledgeStats.top_k }}</dd>
+                </div>
+                <div class="config-item">
+                  <dt>Rerank</dt>
+                  <dd>
+                    <span
+                      class="status-badge"
+                      :class="knowledgeStats.rerank_enabled ? 'status-success' : 'status-muted'"
+                    >{{ knowledgeStats.rerank_enabled ? 'Enabled' : 'Disabled' }}</span>
+                  </dd>
+                </div>
+                <div class="config-item">
+                  <dt>LangGraph</dt>
+                  <dd>
+                    <span
+                      class="status-badge"
+                      :class="knowledgeStats.graph_enabled ? 'status-success' : 'status-muted'"
+                    >{{ knowledgeStats.graph_enabled ? 'Enabled' : 'Disabled' }}</span>
+                  </dd>
+                </div>
+                <!-- 分值与量纲一起显示: 两个尺度差约 4 倍, 光给数字等于请人比较不可比的东西 -->
+                <div class="config-item config-item-wide">
+                  <dt>Score gate</dt>
+                  <dd class="config-gate">
+                    <span class="gate-value">{{ knowledgeStats.score_gate }}</span>
+                    <span class="gate-scale">{{ knowledgeStats.score_gate_scale }}</span>
+                  </dd>
+                </div>
+              </dl>
+              <p class="console-note">
+                The gate always travels with its scale. Rerank relevance and vector cosine differ by
+                roughly 4x, so a bare number invites a comparison between two incomparable things.
+              </p>
+            </section>
+
+            <!-- 知识源 -->
+            <section class="console-block">
+              <h2 class="console-block-title">
+                Sources
+                <span class="console-count">{{ knowledgeStats.sources.length }}</span>
+              </h2>
+              <div v-if="!knowledgeStats.sources.length" class="console-hint">
+                No source has been ingested.
+              </div>
+              <ul v-else class="source-list">
+                <li v-for="source in knowledgeStats.sources" :key="source.source_id" class="source-row">
+                  <div class="source-main">
+                    <span class="source-name">{{ source.name }}</span>
+                    <span class="source-id">{{ source.source_id }}</span>
+                  </div>
+                  <span class="status-badge status-info">{{ source.source_type }}</span>
+                  <span class="source-model">{{ source.embedding_model }}</span>
+                  <span class="source-chunks">{{ source.chunk_count }} chunks</span>
+                </li>
+              </ul>
+            </section>
+          </template>
+
+          <!-- 检索探针 -->
+          <section class="console-block">
+            <h2 class="console-block-title">Retrieval probe</h2>
+            <p class="console-note">
+              Retrieval only — this never calls the LLM. That is what makes it useful: it separates
+              “retrieval did not find it” from “retrieval found it and the model answered badly”.
+              Those two look identical in the chat window and have completely different fixes.
+            </p>
+            <form class="probe-form" @submit.prevent="runProbe">
+              <input
+                v-model="probeText"
+                type="text"
+                placeholder="Who pays for return shipping?"
+              />
+              <button
+                type="submit"
+                class="primary-button"
+                :disabled="isProbing || !probeText.trim()"
+              >
+                {{ isProbing ? 'Retrieving…' : 'Run probe' }}
+              </button>
+            </form>
+
+            <p v-if="probeError" class="console-error">{{ probeError }}</p>
+
+            <div v-if="probeResult" class="probe-result">
+              <div class="probe-verdict" :class="probeResult.hit ? 'verdict-hit' : 'verdict-miss'">
+                <span
+                  class="status-badge"
+                  :class="probeResult.hit ? 'status-success' : 'status-danger'"
+                >{{ probeResult.hit ? 'HIT' : 'MISS' }}</span>
+                <span class="probe-verdict-text">
+                  <template v-if="probeResult.hit">
+                    {{ probeResult.chunks.length }}
+                    {{ probeResult.chunks.length === 1 ? 'chunk' : 'chunks' }}
+                    passed the gate ({{ probeResult.gate }}).
+                  </template>
+                  <template v-else>
+                    No chunk passed the gate ({{ probeResult.gate }}).
+                  </template>
+                </span>
+              </div>
+              <p v-if="!probeResult.hit" class="probe-miss-note">
+                This is a retrieval miss, not a broken page. On this question the Agent answers with
+                the constant fallback text and never reaches the LLM — so nothing it says here can be
+                fabricated, and the fix belongs in the corpus or the gate, not in the prompt.
+              </p>
+
+              <article
+                v-for="(chunk, chunkIndex) in probeResult.chunks"
+                :key="probeChunkKey(chunk, chunkIndex)"
+                class="probe-chunk"
+              >
+                <div class="probe-chunk-head">
+                  <span class="probe-chunk-title">{{ chunk.source_title || 'Untitled chunk' }}</span>
+                  <span class="probe-chunk-score">{{ formatScore(chunk.score) }}</span>
+                </div>
+                <div class="probe-chunk-meta">
+                  <span class="status-badge status-info">{{ chunk.source_type }}</span>
+                  <span class="probe-chunk-id">{{ chunk.chunk_id }}</span>
+                </div>
+                <p class="probe-excerpt">{{ probeExcerpt(chunk) }}</p>
+              </article>
+            </div>
+          </section>
         </div>
       </section>
 
-      <!-- 右栏: 业务对象 -->
-      <aside class="sidebar">
+      <!-- 中栏: 接管台 -->
+      <section v-if="activeNav === 'handover'" class="chat-card console-page">
+        <header class="chat-header">
+          <div class="console-heading">
+            <h1 class="console-title">Handoff</h1>
+            <p class="console-subtitle">
+              Look up who owns a session, and take it over or hand it back.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="secondary-button"
+            :disabled="isLoadingHandoff"
+            @click="fetchHandoffState"
+          >
+            {{ isLoadingHandoff ? 'Loading…' : 'Refresh' }}
+          </button>
+        </header>
+
+        <div class="console-body">
+          <section class="console-block">
+            <h2 class="console-block-title">Session</h2>
+            <form class="lookup-form" @submit.prevent="fetchHandoffState">
+              <label class="field lookup-field">
+                <span>sender_id</span>
+                <input v-model="handoffSenderId" type="text" placeholder="u1001" />
+              </label>
+              <button type="submit" class="secondary-button" :disabled="isLoadingHandoff">
+                View session
+              </button>
+            </form>
+            <p v-if="handoffError" class="console-error">{{ handoffError }}</p>
+          </section>
+
+          <section v-if="handoffState" class="console-block">
+            <h2 class="console-block-title">Control ownership</h2>
+            <div class="owner-panel" :class="handoffOwnerMeta.tone">
+              <span class="control-pill" :class="handoffOwnerMeta.tone">
+                {{ handoffOwnerMeta.label }}
+              </span>
+              <span class="owner-code">{{ handoffState.control_owner }}</span>
+              <p class="owner-desc">{{ handoffOwnerMeta.console }}</p>
+            </div>
+
+            <dl class="config-grid">
+              <div class="config-item">
+                <dt>Handoff trigger</dt>
+                <dd>{{ handoffState.handoff_trigger || '—' }}</dd>
+              </div>
+              <div class="config-item">
+                <dt>Handoff reason</dt>
+                <dd>{{ handoffState.handoff_reason || '—' }}</dd>
+              </div>
+              <div class="config-item">
+                <dt>Active flow</dt>
+                <dd>{{ handoffState.active_flow || '—' }}</dd>
+              </div>
+              <div class="config-item">
+                <dt>Active step</dt>
+                <dd>{{ handoffState.active_step || '—' }}</dd>
+              </div>
+            </dl>
+
+            <h3 class="console-subblock-title">Slots</h3>
+            <div v-if="!handoffSlotEntries.length" class="console-hint">
+              No slot is filled on this session.
+            </div>
+            <ul v-else class="slot-list">
+              <li v-for="slot in handoffSlotEntries" :key="slot.key" class="slot-row">
+                <span class="slot-key">{{ slot.key }}</span>
+                <span class="slot-value">{{ slot.value }}</span>
+              </li>
+            </ul>
+          </section>
+
+          <section v-if="handoffState" class="console-block">
+            <h2 class="console-block-title">Take over</h2>
+            <div class="handoff-actions">
+              <label class="field handoff-reason-field">
+                <span>Reason (optional)</span>
+                <input v-model="handoffReason" type="text" placeholder="Escalated by the customer" />
+              </label>
+              <button
+                type="button"
+                class="primary-button"
+                :disabled="isSubmittingHandoff || handoffState.control_owner === 'HUMAN'"
+                @click="submitHandoff('claim')"
+              >
+                Claim session
+              </button>
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="isSubmittingHandoff || handoffState.control_owner === 'AGENT'"
+                @click="submitHandoff('release')"
+              >
+                Release to Agent
+              </button>
+            </div>
+            <p class="console-note">
+              <strong>PENDING_HUMAN and HUMAN are not the same thing.</strong> Under
+              <code>PENDING_HUMAN</code> the session is queued for a person and the Agent
+              <em>keeps answering</em> — the visitor is not left in silence. Only
+              <code>HUMAN</code> stops the Agent and locks the visitor input. Claiming a session
+              moves it to <code>HUMAN</code>; releasing it hands the conversation back to the Agent.
+            </p>
+          </section>
+        </div>
+      </section>
+
+      <!-- 右栏: 业务对象。只在对话页有意义, 另外两页让出宽度 -->
+      <aside v-if="activeNav === 'chat'" class="sidebar">
         <div class="sidebar-header">
           <h2>Business objects</h2>
         </div>
@@ -1131,6 +1605,11 @@ async function copyText(text, key) {
   overflow: hidden;
 }
 
+/* 知识库与接管台没有业务对象栏, 中栏占满剩下的宽度 */
+.workspace-wide {
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+
 /* ── 左栏: 控制台导航 ─────────────────────────────────────── */
 .console-nav {
   display: flex;
@@ -1223,22 +1702,6 @@ async function copyText(text, key) {
   white-space: nowrap;
 }
 
-.nav-item-tag {
-  flex-shrink: 0;
-  white-space: nowrap;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--tone-muted-bg);
-  color: var(--tone-muted-text);
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.nav-item.active .nav-item-tag {
-  background: var(--on-solid-soft);
-  color: var(--on-solid);
-}
-
 .nav-footer {
   flex-shrink: 0;
   display: flex;
@@ -1321,7 +1784,7 @@ async function copyText(text, key) {
 }
 
 .sidebar-header h2,
-.placeholder-title {
+.console-title {
   margin: 0;
   font-size: 17px;
   font-weight: 600;
@@ -1956,31 +2419,480 @@ async function copyText(text, key) {
   cursor: not-allowed;
 }
 
-/* ── 占位页 ───────────────────────────────────────────────── */
-.placeholder-body {
-  flex: 1;
+/* ── 控制台页 (知识库 / 接管台) ───────────────────────────── */
+.console-page {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 24px;
-  text-align: center;
 }
 
-.placeholder-headline {
-  margin: 0;
-  font-size: 18px;
+.console-heading {
+  min-width: 0;
+}
+
+.console-subtitle {
+  margin: 4px 0 0;
+  max-width: 62ch;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.console-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.console-block {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.console-block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.placeholder-text {
-  margin: 0 0 8px;
-  max-width: 380px;
+.console-subblock-title {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-secondary);
-  font-size: 14px;
+}
+
+.console-count {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.console-note {
+  margin: 12px 0 0;
+  max-width: 78ch;
+  color: var(--text-secondary);
+  font-size: 13px;
   line-height: 1.6;
+}
+
+.console-note code {
+  padding: 1px 5px;
+  border-radius: var(--radius-button);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.console-hint {
+  margin: 0;
+  color: var(--text-placeholder);
+  font-size: 13px;
+}
+
+.console-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-button);
+  background: var(--tone-danger-bg);
+  color: var(--tone-danger-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* 索引状态: 两个独立事实并排, 不等则整块标红 */
+.index-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-secondary);
+}
+
+.index-ok {
+  border-color: var(--tone-success-text);
+  background: var(--tone-success-bg);
+}
+
+.index-mismatch {
+  border-color: var(--tone-danger-text);
+  background: var(--tone-danger-bg);
+}
+
+.index-figure {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.index-number {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.index-caption {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.index-source {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.index-operator {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.index-mismatch .index-operator {
+  color: var(--tone-danger-text);
+}
+
+/* 配置项 */
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.config-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface);
+}
+
+.config-item-wide {
+  grid-column: 1 / -1;
+}
+
+.config-item dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.config-item dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.config-gate {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gate-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.gate-scale {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--tone-info-bg);
+  color: var(--tone-info-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 知识源列表 */
+.source-list,
+.slot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface);
+  transition: background-color var(--duration) linear;
+}
+
+.source-row:hover {
+  background: var(--surface-secondary);
+}
+
+.source-main {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.source-id {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  overflow-wrap: anywhere;
+}
+
+.source-model {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.source-chunks {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* 检索探针 */
+.probe-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.probe-form input {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: border-color var(--duration) linear, background-color var(--duration) linear;
+}
+
+.probe-form input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.probe-form input:focus {
+  outline: none;
+  border-color: var(--brand);
+  background: var(--surface);
+}
+
+.probe-result {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 命中与未命中在视觉上必须一眼分开 */
+.probe-verdict {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+}
+
+.verdict-hit {
+  border-color: var(--tone-success-text);
+  background: var(--tone-success-bg);
+}
+
+.verdict-miss {
+  border-color: var(--tone-danger-text);
+  background: var(--tone-danger-bg);
+}
+
+.probe-verdict-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.probe-miss-note {
+  margin: 0;
+  max-width: 78ch;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.probe-chunk {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface);
+}
+
+.probe-chunk-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.probe-chunk-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.probe-chunk-score {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.probe-chunk-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.probe-chunk-id {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  overflow-wrap: anywhere;
+}
+
+.probe-excerpt {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 接管台 */
+.lookup-form,
+.handoff-actions {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.lookup-field {
+  flex: 0 1 240px;
+}
+
+.handoff-reason-field {
+  flex: 1 1 260px;
+}
+
+.owner-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.owner-panel.control-agent {
+  border-color: var(--tone-info-text);
+  background: var(--tone-info-bg);
+}
+
+.owner-panel.control-pending {
+  border-color: var(--tone-warning-text);
+  background: var(--tone-warning-bg);
+}
+
+.owner-panel.control-human {
+  border-color: var(--tone-success-text);
+  background: var(--tone-success-bg);
+}
+
+.owner-panel .control-pill {
+  background: var(--surface);
+}
+
+.owner-code {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+}
+
+.owner-desc {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.slot-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface);
+}
+
+.slot-key {
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.slot-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 /* ── 右栏: 业务对象 ───────────────────────────────────────── */
@@ -2090,7 +3002,8 @@ async function copyText(text, key) {
 
 /* ── 响应式 ───────────────────────────────────────────────── */
 @media (max-width: 1180px) {
-  .workspace {
+  .workspace,
+  .workspace-wide {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
@@ -2106,7 +3019,8 @@ async function copyText(text, key) {
     padding: 0;
   }
 
-  .workspace {
+  .workspace,
+  .workspace-wide {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
@@ -2120,6 +3034,10 @@ async function copyText(text, key) {
     border-right: none;
   }
 
+  .console-page {
+    min-height: 70vh;
+  }
+
   .chat-card {
     min-height: 70vh;
   }
@@ -2131,10 +3049,6 @@ async function copyText(text, key) {
   .nav-list {
     flex-direction: row;
     flex-wrap: wrap;
-  }
-
-  .nav-item-tag {
-    display: none;
   }
 
   .composer {
