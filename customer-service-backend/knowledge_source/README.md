@@ -1,26 +1,51 @@
-# 知识源目录
+# Knowledge sources
 
-本目录存放入库到向量库的商家知识文档，由 `business_agent/knowledge/ingest` 流水线读取。
+Merchant knowledge documents that get indexed into the vector store. Read by the
+`business_agent/knowledge/ingest` pipeline.
 
-| 子目录 | 知识源类型 | 切分方式 |
+| Directory | Source type | Splitting |
 |---|---|---|
-| `faq/` | `faq` | 一条一片，不做语义切分 |
-| `policy/` | `document` | `RecursiveCharacterTextSplitter`，按 `\n## / \n### / \n\n / 。` 递归切分 |
+| `faq/` | `faq` | One chunk per entry — no semantic splitting |
+| `policy/` | `document` | `RecursiveCharacterTextSplitter`, recursive on `\n## / \n### / \n\n / 。` |
 
-## 配置纪律（规范 3.1.1）
+## The content stays Chinese — deliberately
 
-**易变数据一律不写进本目录**：商品价格、库存数量、订单状态、物流单号只能来自业务接口。
-写进来会造成「检索到的旧值」与「接口的新值」并存，这是最难排查的一类客服事故。
+The files under `faq/` and `policy/` are the retrieval corpus, not documentation.
+They are written in Chinese because users ask in Chinese, the agent answers in
+Chinese, and **`KNOWLEDGE_SCORE_THRESHOLD=0.58` was calibrated against this
+Chinese corpus**. Translating the corpus would degrade cross-lingual similarity
+and invalidate the threshold in one move. If you ever do translate it, re-run
+`-m business_agent.knowledge.ingest calibrate` and treat the old threshold as void.
 
-本目录只放稳定事实：政策条款、时效承诺、流程步骤、平台规则。
+This README is developer-facing, so it is in English.
 
-## 入库
+## Configuration discipline (spec 3.1.1)
+
+**Never put volatile data in this directory.** Product prices, stock levels,
+order status and tracking numbers must come from the business API instead.
+
+Writing them here makes a stale retrieved value coexist with a fresh API value —
+the hardest class of customer-service defect to trace, because both answers look
+authoritative and neither is obviously wrong.
+
+This directory holds stable facts only: policy clauses, timing commitments,
+process steps, platform rules.
+
+## Ingesting
 
 ```bash
 # customer-service-backend/
-uv run python -m business_agent.knowledge.ingest ingest        # 全量入库（内容未变则跳过）
-uv run python -m business_agent.knowledge.ingest ingest --force
+uv run python -m business_agent.knowledge.ingest ingest          # skips sources whose content_hash is unchanged
+uv run python -m business_agent.knowledge.ingest ingest --force  # re-embeds everything
+uv run python -m business_agent.knowledge.ingest stats           # vector_chunks must equal metadata_chunks
 uv run python -m business_agent.knowledge.ingest list
 uv run python -m business_agent.knowledge.ingest delete --source-id policy.return_policy
 uv run python -m business_agent.knowledge.ingest query --text "七天无理由怎么退"
 ```
+
+> On a fresh checkout, use `--force`. Chunk metadata lives in the shared MySQL
+> instance while the Chroma index is a local gitignored directory, and the skip
+> logic only compares `content_hash` against MySQL — it never checks whether the
+> local vector store actually holds those vectors. Plain `ingest` will then report
+> every source `skipped`, exit 0, and leave you with an empty index. The only
+> reliable check is `stats`: `vector_chunks` must equal `metadata_chunks`.
