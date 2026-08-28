@@ -28,7 +28,15 @@ class Settings(BaseSettings):
   # Embedding reuses the LLM's DashScope credentials (LLM_API_KEY / LLM_BASE_URL); there is no
   # second set of credentials. Ingest and retrieval must use the same model, so the model name is
   # configured in exactly this one place.
-  embedding_model: str                  # DashScope text-embedding-v3
+  # Embedding backend: dashscope (hosted, dense only) | bge_m3 (local, dense + sparse).
+  # Hybrid retrieval needs sparse vectors, so the Milvus path requires bge_m3.
+  embedding_backend: str
+  # Inference device, bge_m3 only: cpu | mps | cuda.
+  # Measured on M1 Max — mps is 2x faster per query (0.148s vs 0.308s) but slower in batch
+  # (0.038s vs 0.022s per item): MPS has a fixed per-call overhead batching cannot amortise.
+  # Use mps for queries, cpu for the ingest CLI. use_fp16 stays off — it needs CUDA.
+  embedding_device: str
+  embedding_model: str                  # dashscope: text-embedding-v3 | bge_m3: BAAI/bge-m3
   embedding_dimensions: int             # 1024; changing models forces a full reindex
   embedding_batch_size: int             # the DashScope-compatible API accepts at most 10 per call
 

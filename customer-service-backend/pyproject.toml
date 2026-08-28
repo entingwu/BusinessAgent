@@ -16,5 +16,15 @@ dependencies = [
     "pydantic-settings>=2.13.1",
     "pyyaml>=6.0.3",
     "sqlalchemy[asyncio]>=2.0.49",
-    "uvicorn[standard]>=0.44.0"
+    "uvicorn[standard]>=0.44.0",
+    # ---- RAG 重做：BGE-M3 本地 Embedding（Phase 2）----
+    # 注意：atguigu 的 pyproject 强制 torch 走 download.pytorch.org/whl/cu128，
+    # 本机是 Apple Silicon 无 CUDA，必须走默认 PyPI 的 arm64 轮子，且 use_fp16 关闭。
+    "pymilvus[model]>=2.5.0",
+    "torch>=2.2.0",
+    # pymilvus[model] 运行时还需要这两个，但没有声明为硬依赖——
+    # 它会在首次构造 BGEM3EmbeddingFunction 时试图 pip install，
+    # 而 uv 管理的 venv 里没有 pip，直接失败。必须显式列出。
+    "datasets>=3.0.0",
+    "FlagEmbedding>=1.3.0"
 ]
