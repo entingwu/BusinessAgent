@@ -96,3 +96,32 @@ class HandoffRequest(BaseModel):
   sender_id: str
   action: Literal["claim", "release"]
   reason: str = ""
+
+
+class KnowledgeStatsResponse(BaseModel):
+  """What the retrieval chain is configured with and how much it has indexed."""
+  vector_backend: str
+  embedding_backend: str
+  embedding_model: str
+  rerank_enabled: bool
+  graph_enabled: bool
+  top_k: int
+  # The gate and its scale travel together on purpose: rerank relevance and vector cosine differ
+  # by roughly 4x, so a bare number invites the reader to compare two incomparable things.
+  score_gate: float
+  score_gate_scale: str
+  vector_chunks: int
+  metadata_chunks: int
+  sources: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class KnowledgeProbeRequest(BaseModel):
+  text: str
+
+
+class KnowledgeProbeResponse(BaseModel):
+  """One retrieval, no generation — separates a retrieval miss from a bad answer."""
+  query: str
+  hit: bool
+  gate: float
+  chunks: list[dict[str, Any]] = Field(default_factory=list)
