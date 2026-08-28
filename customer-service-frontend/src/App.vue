@@ -365,6 +365,17 @@ function formatAmount(amount) {
 }
 
 const ORDER_STATUS_CLASS = {
+  'Awaiting payment': 'status-warning',
+  'Awaiting shipment': 'status-warning',
+  'Awaiting pickup': 'status-warning',
+  'In transit': 'status-info',
+  'Out for delivery': 'status-info',
+  'Completed': 'status-success',
+  'Delivered': 'status-success',
+  'Cancelled': 'status-muted',
+  'Refunding': 'status-danger',
+  'Refunded': 'status-muted',
+  /* 中文键保留为兼容垫片，见 ORDER_STATUS_LABEL 上方注释 */
   '待支付': 'status-warning',
   '待发货': 'status-warning',
   '待揽收': 'status-warning',
@@ -381,9 +392,24 @@ function getStatusClass(status) {
   return ORDER_STATUS_CLASS[status] || 'status-muted'
 }
 
-/* 订单状态由业务中台返回, 值是中文。这里只做展示层翻译,
-   查表的键必须保持中文原值, 未知状态原样显示。 */
+/* 订单状态由业务中台返回。2026-08-28 起库里存的就是英文
+   (2026-08-28-englishify-status-values.sql)，所以英文键多数是恒等映射。
+
+   中文键**不是过渡期残留，是刻意保留的兼容垫片**：另外两个迁移脚本也会写
+   stock_status / status，而本仓的约定是「拿不准就重跑迁移」；别人的开发机上
+   也可能还是没跑过英语化的库。两套都认，这些情况就都不会变成
+   「状态显示不出来」。未知状态原样显示，不吞。 */
 const ORDER_STATUS_LABEL = {
+  'Awaiting payment': 'Awaiting payment',
+  'Awaiting shipment': 'Awaiting shipment',
+  'Awaiting pickup': 'Awaiting pickup',
+  'In transit': 'In transit',
+  'Out for delivery': 'Out for delivery',
+  'Completed': 'Completed',
+  'Delivered': 'Delivered',
+  'Cancelled': 'Cancelled',
+  'Refunding': 'Refunding',
+  'Refunded': 'Refunded',
   '待支付': 'Awaiting payment',
   '待发货': 'Awaiting shipment',
   '待揽收': 'Awaiting pickup',

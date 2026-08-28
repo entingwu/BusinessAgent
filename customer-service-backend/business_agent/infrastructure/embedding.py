@@ -18,10 +18,14 @@ Embedding 后端的统一入口。
 批量则相反：cpu 0.022s/条 优于 mps 0.038s/条——MPS 每次调用的固定开销
 批量时摊薄不掉。因此 EMBEDDING_DEVICE 可配，查询侧用 mps、入库脚本用 cpu。
 """
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from business_agent.config.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -171,6 +175,44 @@ class BgeM3Backend(EmbeddingBackend):
 
 _BACKENDS = {"dashscope": DashScopeBackend, "bge_m3": BgeM3Backend}
 _instance: EmbeddingBackend | None = None
+
+
+def warmup_embedding_backend() -> None:
+  """
+  Goal: 在事件循环启动**之前**把模型载进内存
+
+  BgeM3Backend 原本是懒加载：第一次检索时才 _ensure_model()。那时进程已经在
+  uvloop 里跑着，而加载 BGE-M3 会 fork 出子进程，把事件循环的 fd 状态弄坏——
+  实测是整个 uvicorn 进程 **SIGSEGV**：
+
+      exception  EXC_BAD_ACCESS / SIGSEGV  (possible pointer authentication failure)
+      frames     kevent → uv__io_poll → uv_run → uvloop Loop._run
+
+  症状很难往这上面猜：服务正常启动、第一个知识问题也正常答完，然后进程凭空
+  消失——没有 traceback、没有 shutdown 日志，端口直接空出来。崩溃报告是唯一
+  的线索。加载前的那行 gRPC 警告
+  `FD from fork parent still in poll list` 是同一件事的前兆。
+
+  在 uvicorn.run() 之前调用它，fork 就发生在事件循环存在之前，冲突不成立。
+  顺带把首个知识请求的模型加载耗时（实测 15.8s）挪到启动期。
+
+  失败不抛：模型加载不上时，检索路径本来就有 KnowledgeUnavailableError 的降级
+  分支，不该因为预热失败就让服务起不来。
+  """
+  try:
+    backend = get_embedding_backend()
+  except Exception as error:  # noqa: BLE001 - 预热失败不应阻止服务启动
+    logger.warning("embedding_warmup_skipped error=%r", error)
+    return
+  ensure = getattr(backend, "_ensure_model", None)
+  if ensure is None:
+    return
+  try:
+    ensure()
+    logger.info("embedding_warmup_done backend=%s model=%s",
+                settings.embedding_backend, settings.embedding_model)
+  except Exception as error:  # noqa: BLE001
+    logger.warning("embedding_warmup_failed error=%r", error)
 
 
 def get_embedding_backend() -> EmbeddingBackend:

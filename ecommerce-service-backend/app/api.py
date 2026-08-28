@@ -48,17 +48,30 @@ router = APIRouter()
 
 # stock_quantity 才是真实库存，stock_status 只是它的派生展示值。
 # 判定「有没有货」一律以数量为准；这两个常量仍保留，用于写回展示值。
-# 订单状态是**匹配键，不是展示文本**。定下来的做法：数据库里的值保持中文，
-# 前端 ORDER_STATUS_LABEL / ORDER_STATUS_CLASS 以它为键映射成英文展示。
-# 所以这里的字面量不要翻译——翻了就再也匹配不上任何一行。
+# 订单状态是**匹配键，不是展示文本**，所以读侧刻意同时接受中英两套值。
+#
+# 数据库里的值已由 2026-08-28-englishify-status-values.sql 翻成英文，写侧（下面的
+# _NEW_ORDER_STATUS、_IN_STOCK_LABEL）也只写英文。中文仍留在集合里，不是过渡期
+# 的残留，而是**故意的兼容垫片**：
+#   · 2026-08-27-unify-product-attributes.sql 与 stock-quantity 那个脚本都会写
+#     stock_status，本仓的约定又是「拿不准就重跑迁移」；
+#   · 别的开发机、别的分支上的库可能还没跑过英语化迁移。
+# 任何一种情况下，只要读侧两套都认，就不会出现「值对不上」这种静默失效。
 #
 # 抽成具名常量是为了让这个依赖能被 grep 到。原来它是内联字面量，
 # 而它的失败形态是静默的：值一旦对不上，这个端点对任何订单都返回 400，
 # 不报错、不崩，只是永远拒绝。「两处独立事实、两处都不报警」是这个仓里反复出现的形态。
-_SHIPPABLE_STATUSES = frozenset({"待发货", "待揽收"})
+_SHIPPABLE_STATUSES = frozenset({
+  "Awaiting shipment", "Awaiting pickup",   # 当前值
+  "待发货", "待揽收",                        # 兼容未跑过英语化迁移的库
+})
 
-_IN_STOCK_LABEL = "有货"
-_OUT_OF_STOCK_LABEL = "缺货"
+# 写回展示值时只写英文；读侧的判定一律以 stock_quantity 为准，不看这两个字符串。
+_IN_STOCK_LABEL = "In stock"
+_OUT_OF_STOCK_LABEL = "Out of stock"
+
+# 新建订单的状态。支付不在本服务范围内，所以订单落库即为「待支付」。
+_NEW_ORDER_STATUS = "Awaiting payment"
 
 _LIKE_ESCAPE_CHAR = "\\"
 
@@ -123,7 +136,7 @@ def _parse_attr_filters(raw_filters: list[str]) -> list[tuple[str, str]]:
         if not key or not value:
             raise HTTPException(
                 status_code=400,
-                detail=f"属性过滤条件 “{raw}” 格式不正确，正确格式为 “属性名:属性值”，例如 attr=use_case:办公。",
+                detail=f"Attribute filter \u201c{raw}\u201d is malformed. Use \u201cname:value\u201d, for example attr=use_case:office.",
             )
         if key not in _FILTERABLE_ATTR_KEYS:
             raise HTTPException(
@@ -140,7 +153,7 @@ def _parse_attr_filters(raw_filters: list[str]) -> list[tuple[str, str]]:
 def _get_user_or_404(db: Session, user_id: str) -> User:
     user = db.query(User).filter(User.user_id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在。")
+        raise HTTPException(status_code=404, detail=f"User {user_id} does not exist.")
     return user
 
 
@@ -156,7 +169,7 @@ def _build_recent_orders(db: Session, user: User, limit: int = 5) -> list[OrderS
     return [
         OrderSummaryData(
             order_id=order.order_id,
-            title=order.items[0].title_snapshot if order.items else "未知商品",
+            title=order.items[0].title_snapshot if order.items else "Unknown product",
             status=order.status,
             amount=order.amount,
             created_at=order.created_at,
@@ -269,14 +282,14 @@ def _get_order_or_404(db: Session, order_id: str) -> Order:
         .first()
     )
     if not order:
-        raise HTTPException(status_code=404, detail=f"订单 {order_id} 不存在。")
+        raise HTTPException(status_code=404, detail=f"Order {order_id} does not exist.")
     return order
 
 
 def _get_product_or_404(db: Session, product_id: str) -> Product:
     product = db.query(Product).filter(Product.product_id == product_id).first()
     if not product:
-        raise HTTPException(status_code=404, detail=f"商品 {product_id} 不存在。")
+        raise HTTPException(status_code=404, detail=f"Product {product_id} does not exist.")
     return product
 
 
@@ -284,8 +297,8 @@ def _get_product_or_404(db: Session, product_id: str) -> Product:
     "/health",
     response_model=ApiResponse,
     tags=["系统"],
-    summary="健康检查",
-    description="用于检查服务和数据库连接是否正常。",
+    summary="Health check",
+    description="Checks that the service and its database connection are healthy.",
 )
 def health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
@@ -296,8 +309,8 @@ def health(db: Session = Depends(get_db)):
     "/users/{user_id}/orders",
     response_model=ApiResponse,
     tags=["用户"],
-    summary="查询用户最近订单列表",
-    description="根据用户 ID 查询最近订单，用于前端展示订单对象列表。",
+    summary="List a user's recent orders",
+    description="Recent orders for a user id, used to render the order object list in the UI.",
 )
 def user_orders(user_id: str, db: Session = Depends(get_db)):
     user = _get_user_or_404(db, user_id)
@@ -308,8 +321,8 @@ def user_orders(user_id: str, db: Session = Depends(get_db)):
     "/users/{user_id}/products",
     response_model=ApiResponse,
     tags=["用户"],
-    summary="查询用户最近商品列表",
-    description="根据用户 ID 查询最近购买或关联过的商品，用于前端展示商品对象列表。",
+    summary="List a user's recent products",
+    description="Products a user recently bought or interacted with, used to render the product object list in the UI.",
 )
 def user_products(user_id: str, db: Session = Depends(get_db)):
     user = _get_user_or_404(db, user_id)
@@ -320,8 +333,8 @@ def user_products(user_id: str, db: Session = Depends(get_db)):
     "/orders/{order_id}",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="查询订单详情",
-    description="根据订单 ID 查询订单主信息、收货信息以及订单商品明细。",
+    summary="Get order detail",
+    description="Order header, delivery details and line items for an order id.",
 )
 def order_detail(order_id: str, db: Session = Depends(get_db)):
     order = _get_order_or_404(db, order_id)
@@ -352,8 +365,8 @@ def order_detail(order_id: str, db: Session = Depends(get_db)):
     "/orders/{order_id}/status",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="查询订单状态",
-    description="返回订单当前状态及面向用户展示的状态说明。",
+    summary="Get order status",
+    description="The order's current status plus the customer-facing description of it.",
 )
 def order_status(order_id: str, db: Session = Depends(get_db)):
     order = _get_order_or_404(db, order_id)
@@ -370,8 +383,8 @@ def order_status(order_id: str, db: Session = Depends(get_db)):
     "/orders/{order_id}/logistics",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="查询订单物流信息",
-    description="返回物流公司、运单号、当前物流状态和物流轨迹。",
+    summary="Get shipment tracking",
+    description="Carrier, tracking number, current shipping status and the tracking events.",
 )
 def order_logistics(order_id: str, db: Session = Depends(get_db)):
     order = _get_order_or_404(db, order_id)
@@ -383,7 +396,7 @@ def order_logistics(order_id: str, db: Session = Depends(get_db)):
         .first()
     )
     if not record:
-        raise HTTPException(status_code=404, detail=f"订单 {order_id} 暂无物流信息。")
+        raise HTTPException(status_code=404, detail=f"No shipping information is available for order {order_id} yet.")
 
     traces = sorted(record.traces, key=lambda item: item.trace_time, reverse=True)
     return _wrap(
@@ -405,7 +418,7 @@ def order_logistics(order_id: str, db: Session = Depends(get_db)):
     "/products",
     response_model=ApiResponse,
     tags=["商品"],
-    summary="按条件检索商品",
+    summary="Search products",
     description=(
         "按关键词、价格区间、商品属性和库存状态检索商品，返回分页后的候选商品列表与匹配总数，"
         "供上层按用户偏好做商品推荐。所有查询参数均可选；没有匹配商品时返回空列表且 total 为 0，不返回 404。\n\n"
@@ -420,34 +433,34 @@ def search_products(
     response: Response,
     q: str | None = Query(
         default=None,
-        description="关键词，对商品标题与描述做模糊匹配（不区分大小写）。",
+        description="Keyword, matched case-insensitively against product title and description.",
     ),
     min_price: Decimal | None = Query(
         default=None,
         ge=0,
-        description="价格下限，闭区间（含等于）。",
+        description="Minimum price, inclusive.",
     ),
     max_price: Decimal | None = Query(
         default=None,
         ge=0,
-        description="价格上限，闭区间（含等于）。",
+        description="Maximum price, inclusive.",
     ),
     attr: list[str] | None = Query(
         default=None,
-        description="属性过滤条件，格式 “属性名:属性值”，可重复传入，多个条件之间是「与」的关系。",
+        description="Attribute filter in the form \u201cname:value\u201d. Repeatable; several filters are ANDed together.",
     ),
     in_stock: bool | None = Query(
         default=None,
-        description="true 只返回有货商品，false 只返回非有货商品，不传则不按库存过滤。",
+        description="true returns only in-stock products, false only out-of-stock ones; omit to skip the stock filter.",
     ),
-    limit: int = Query(default=10, ge=1, le=50, description="本次返回的最大条数，默认 10，上限 50。"),
-    offset: int = Query(default=0, ge=0, description="结果偏移量，用于翻页，默认 0。"),
+    limit: int = Query(default=10, ge=1, le=50, description="Maximum number of results; defaults to 10, capped at 50."),
+    offset: int = Query(default=0, ge=0, description="Result offset for paging; defaults to 0."),
     db: Session = Depends(get_db),
 ):
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(
             status_code=400,
-            detail=f"价格区间不合法：价格下限 {min_price} 大于价格上限 {max_price}。",
+            detail=f"Invalid price range: the minimum {min_price} is greater than the maximum {max_price}.",
         )
 
     attr_filters = _parse_attr_filters(attr or [])
@@ -521,8 +534,8 @@ def search_products(
     "/products/{product_id}",
     response_model=ApiResponse,
     tags=["商品"],
-    summary="查询商品详情",
-    description="根据商品 ID 查询商品标题、描述、价格、库存状态和规格参数。",
+    summary="Get product detail",
+    description="Title, description, price, stock status and specifications for a product id.",
 )
 def product_detail(product_id: str, db: Session = Depends(get_db)):
     product = _get_product_or_404(db, product_id)
@@ -544,7 +557,7 @@ def product_detail(product_id: str, db: Session = Depends(get_db)):
     "/orders",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="创建订单",
+    summary="Create an order",
     description=(
         "创建一笔订单并扣减库存。订单创建后状态为「待支付」——支付不在本服务范围内，"
         "支付状态由业务中台后续回写。\n\n"
@@ -600,12 +613,12 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
     if over_limit:
         raise HTTPException(
             status_code=422,
-            detail=f"单个商品最多购买 99 件，{'、'.join(over_limit)} 超出上限。",
+            detail=f"A single product is limited to 99 units; {', '.join(over_limit)} exceeds that.",
         )
 
     missing = sorted(set(wanted) - set(found))
     if missing:
-        raise HTTPException(status_code=404, detail=f"商品 {'、'.join(missing)} 不存在。")
+        raise HTTPException(status_code=404, detail=f"Product {', '.join(missing)} does not exist.")
 
     # 4. 先全量校验库存，再统一扣减——避免扣到一半发现不够，留下一堆被扣的库存
     shortages = [
@@ -614,15 +627,15 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         if found[pid].stock_quantity < qty
     ]
     if shortages:
-        raise HTTPException(status_code=409, detail=f"库存不足：{'；'.join(shortages)}。")
+        raise HTTPException(status_code=409, detail=f"Insufficient stock: {'; '.join(shortages)}.")
 
     order_id = f"O{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
     created_at = datetime.now()
     order = Order(
         order_id=order_id,
         user_id=user.id,
-        status="待支付",
-        status_desc="订单已创建，等待支付。",
+        status=_NEW_ORDER_STATUS,
+        status_desc="Order created, awaiting payment.",
         amount=Decimal("0.00"),
         created_at=created_at,
         receiver_name=body.receiver_name,
@@ -694,8 +707,8 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
     "/orders/{order_id}/shipping-reminders",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="创建发货提醒",
-    description="为指定订单创建一条发货提醒请求。当前仅允许对待发货或待揽收订单发起提醒。",
+    summary="Create a shipping reminder",
+    description="Create a shipping reminder for an order. Only orders awaiting shipment or awaiting pickup may be reminded.",
 )
 def create_shipping_reminder(
     order_id: str,
@@ -706,7 +719,7 @@ def create_shipping_reminder(
     if order.status not in _SHIPPABLE_STATUSES:
         raise HTTPException(
             status_code=400,
-            detail=f"订单当前状态为“{order.status}”，当前不适合再次发起发货提醒。",
+            detail=f"The order is currently \u201c{order.status}\u201d, which is not a state a shipping reminder applies to.",
         )
 
     operation_id = f"U{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
@@ -737,8 +750,8 @@ def create_shipping_reminder(
     "/orders/{order_id}/refund-applications",
     response_model=ApiResponse,
     tags=["订单"],
-    summary="创建退款申请",
-    description="为指定订单创建退款申请。如果订单已有进行中的退款申请，将返回冲突错误。",
+    summary="Create a refund request",
+    description="Create a refund request for an order. Returns a conflict if one is already in progress.",
 )
 def create_refund_application(
     order_id: str,
@@ -756,7 +769,7 @@ def create_refund_application(
     if existing and existing.status in {"submitted", "processing"}:
         raise HTTPException(
             status_code=409,
-            detail=f"订单 {order_id} 已存在进行中的退款申请。",
+            detail=f"Order {order_id} already has a refund request in progress.",
         )
 
     operation_id = f"R{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"

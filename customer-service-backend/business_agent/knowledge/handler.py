@@ -26,8 +26,20 @@ class KnowledgeHandler:
     # 1. Resolve provider ids from the knowledge intents
     provider_ids = self._get_provider_ids_by_intents(intents)
 
+    # 2. Query the providers **one at a time**.
+    #
+    # This was briefly changed to asyncio.gather to save wall-clock: a single intent like
+    # return_policy maps to both faq.default and rag.default, each doing its own embed + vector
+    # search + rerank round trip, so in series they cost ~2.2s more per answer than they need to.
+    #
+    # **It deadlocked.** With gather, retrieval stopped producing any log line at all — the
+    # planner logged, then nothing, and the request hung past 90s while the process stayed alive.
+    # The local BGE-M3 model object and the Milvus client are not safe to drive from two
+    # coroutines at once, and neither of them fails loudly when you do; they just stop.
+    #
+    # Making this concurrent is still worth doing, but it needs the providers to hold their own
+    # model/connection handles, or a lock around the shared ones. Do not simply re-add gather.
     chunks: list[KnowledgeChunk] = []
-    # 2. Resolve the Provider objects from those ids
     for provider_id in provider_ids:
         provider = self.knowledge_register.get_provider_by_id(provider_id)
 

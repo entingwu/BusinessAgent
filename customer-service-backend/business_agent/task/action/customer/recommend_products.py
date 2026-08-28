@@ -33,23 +33,21 @@ MAX_CARDS = 4
 
 # Display labels for the commerce service's stock_status values.
 #
-# stock_status stays Chinese **in the database on purpose**, and this map is the reason it can.
-# Two places in the commerce service treat it as a matching key rather than as text:
-#   - the stock decrement writes `_IN_STOCK_LABEL = "有货"` back on every order placed;
-#   - 2026-08-28-stock-quantity-and-order-idempotency.sql carries an unconditional
-#     `UPDATE products SET stock_status = IF(stock_quantity > 0, '有货', '缺货')`, and migrations
-#     here are re-run on purpose whenever anyone is unsure.
-# Translating the column therefore does not stay translated, and nothing warns you when it
-# reverts.
+# Since 2026-08-28-englishify-status-values.sql the catalogue stores English, so the English
+# entries below are identity mappings and this table looks redundant. It is not.
 #
-# Mapping at display time instead is immune to both: the stored value never moves, so both of
-# those keep matching. It is the same pattern the front end already uses for order status
-# (ORDER_STATUS_LABEL in App.vue), which is why statuses read "In transit" in the UI while the
-# database still says 运输中.
+# Two other migrations write stock_status — 2026-08-27-unify-product-attributes.sql and
+# 2026-08-28-stock-quantity-and-order-idempotency.sql — and the convention in this repo is to
+# re-run a migration whenever anyone is unsure. Both have been updated to write English, but a
+# database on another machine, or one restored from an older dump, can still hold the Chinese
+# values. Mapping both spellings means that costs nothing instead of showing 有货 to an English
+# user.
 #
-# An unknown value falls through unchanged rather than being blanked — showing 有货 to an English
-# user is a small blemish; showing nothing hides whether the item is in stock at all.
+# An unmapped value falls through unchanged rather than being blanked — a new catalogue value
+# should look untranslated, not invisible.
 STOCK_STATUS_LABELS: dict[str, str] = {
+  "In stock": "In stock",
+  "Out of stock": "Out of stock",
   "有货": "In stock",
   "缺货": "Out of stock",
   "现货": "In stock",

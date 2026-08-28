@@ -33,7 +33,7 @@ class Product(Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    # stock_status 面向展示（有货 / 缺货），stock_quantity 是真实库存。
+    # stock_status 面向展示（In stock / Out of stock），stock_quantity 是真实库存。
     # 判定有没有货一律看 stock_quantity，stock_status 只是它的派生展示值。
     stock_status: Mapped[str] = mapped_column(String(32))
     stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
@@ -55,7 +55,7 @@ class Order(Base):
     receiver_name: Mapped[str] = mapped_column(String(64))
     receiver_phone_masked: Mapped[str] = mapped_column(String(32))
     receiver_address: Mapped[str] = mapped_column(String(255))
-    delivery_method: Mapped[str] = mapped_column(String(32), default="标准配送")
+    delivery_method: Mapped[str] = mapped_column(String(32), default="Standard shipping")
     # 幂等键：同一个 key 重复下单只产生一笔订单，重复请求原样返回首次的结果。
     # collation 在 DDL 里定为 utf8mb4_0900_bin。不能用 utf8mb4_bin——它区分大小写
     # 但仍是 PAD SPACE，尾空格不同的两个键照样撞车；只有 UCA 9.0 那套是 NO PAD

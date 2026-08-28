@@ -129,7 +129,7 @@ class OperationResultData(BaseModel):
 
 class CreateOrderItemRequest(BaseModel):
     product_id: str
-    quantity: int = Field(ge=1, le=99, description="购买数量，1–99 件")
+    quantity: int = Field(ge=1, le=99, description="Quantity, 1-99")
 
 
 class CreateOrderRequest(BaseModel):
@@ -140,9 +140,9 @@ class CreateOrderRequest(BaseModel):
     user_id: str
     items: list[CreateOrderItemRequest] = Field(min_length=1, max_length=20)
     receiver_name: str = Field(min_length=1, max_length=64)
-    receiver_phone: str = Field(min_length=1, max_length=32, description="完整手机号，服务端脱敏后落库")
+    receiver_phone: str = Field(min_length=1, max_length=32, description="Full phone number; masked server-side before it is stored")
     receiver_address: str = Field(min_length=1, max_length=255)
-    delivery_method: str = Field(default="标准配送", max_length=32)
+    delivery_method: str = Field(default="Standard shipping", max_length=32)
     # 幂等键由调用方生成（对话侧应当一次下单会话固定一个 key）。
     # 同一个 key 重复提交只会产生一笔订单，重复请求原样返回首次结果。
     idempotency_key: str = Field(min_length=8, max_length=64)
