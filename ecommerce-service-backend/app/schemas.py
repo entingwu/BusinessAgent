@@ -84,6 +84,7 @@ class ProductData(BaseModel):
     description: str
     price: Decimal
     stock_status: str
+    stock_quantity: int
     cover_url: str | None = None
     attributes: dict[str, Any]
 
@@ -94,6 +95,7 @@ class ProductSearchItemData(BaseModel):
     price: Decimal
     cover_url: str | None = None
     stock_status: str
+    stock_quantity: int
     # stock_status 是 VARCHAR 字符串，语义判定收在中台，调用方不必自己猜哪些取值算有货
     in_stock: bool
     attributes: dict[str, Any]
@@ -123,3 +125,37 @@ class OperationResultData(BaseModel):
     order_id: str
     status: str
     status_desc: str
+
+
+class CreateOrderItemRequest(BaseModel):
+    product_id: str
+    quantity: int = Field(ge=1, le=99, description="购买数量，1–99 件")
+
+
+class CreateOrderRequest(BaseModel):
+    """
+    创建订单的请求体。对应规范 3.3.5：收集 SKU、数量、地址、配送方式 → 确认 → 创建订单。
+    支付不在范围内，订单创建后置为「待支付」，支付状态由业务中台回写。
+    """
+    user_id: str
+    items: list[CreateOrderItemRequest] = Field(min_length=1, max_length=20)
+    receiver_name: str = Field(min_length=1, max_length=64)
+    receiver_phone: str = Field(min_length=1, max_length=32, description="完整手机号，服务端脱敏后落库")
+    receiver_address: str = Field(min_length=1, max_length=255)
+    delivery_method: str = Field(default="标准配送", max_length=32)
+    # 幂等键由调用方生成（对话侧应当一次下单会话固定一个 key）。
+    # 同一个 key 重复提交只会产生一笔订单，重复请求原样返回首次结果。
+    idempotency_key: str = Field(min_length=8, max_length=64)
+
+
+class CreateOrderResultData(BaseModel):
+    order_id: str
+    status: str
+    status_desc: str
+    amount: Decimal
+    delivery_method: str
+    created_at: datetime
+    items: list[OrderItemData]
+    # 这一笔是不是幂等重放。true 表示订单此前已创建，本次没有产生新订单，
+    # 调用方据此区分「下单成功」与「重复提交」，不要把重放当成第二笔成交。
+    idempotent_replay: bool

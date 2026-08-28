@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, or_, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -20,6 +21,8 @@ from app.models import (
 )
 from app.schemas import (
     ApiResponse,
+    CreateOrderRequest,
+    CreateOrderResultData,
     LogisticsData,
     LogisticsTraceData,
     OrderDetailData,
@@ -40,9 +43,10 @@ from app.schemas import (
 
 router = APIRouter()
 
-# products.stock_status 目前是字符串枚举（如“有货”“缺货”），不是库存数量。
-# 这里用白名单判定“有货”，未知的新状态一律视为不可售，避免把缺货商品推荐给用户。
-_IN_STOCK_STATUSES = ("有货", "现货", "有库存")
+# stock_quantity 才是真实库存，stock_status 只是它的派生展示值。
+# 判定「有没有货」一律以数量为准；这两个常量仍保留，用于写回展示值。
+_IN_STOCK_LABEL = "有货"
+_OUT_OF_STOCK_LABEL = "缺货"
 
 _LIKE_ESCAPE_CHAR = "\\"
 
@@ -72,9 +76,14 @@ def _build_like_pattern(keyword: str) -> str:
     return f"%{escaped}%"
 
 
-def _is_in_stock(stock_status: str) -> bool:
-    """按白名单判定“有货”。把语义收在中台，调用方不必自己猜 VARCHAR 字符串的含义。"""
-    return stock_status in _IN_STOCK_STATUSES
+def _is_in_stock(product: Product) -> bool:
+    """判定有没有货。以 stock_quantity 为准——stock_status 是给人看的，数量是给系统用的。"""
+    return product.stock_quantity > 0
+
+
+def _stock_label(quantity: int) -> str:
+    """由库存数量派生展示用的 stock_status，保证两者不会说两套话。"""
+    return _IN_STOCK_LABEL if quantity > 0 else _OUT_OF_STOCK_LABEL
 
 
 def _build_json_path(key: str) -> str:
@@ -173,6 +182,44 @@ def _build_recent_products(db: Session, user: User, limit: int = 5) -> list[Prod
             )
         )
     return products
+
+
+def _mask_phone(phone: str) -> str:
+    """
+    手机号脱敏后落库。中台不保存完整手机号——现有数据列名就叫 receiver_phone_masked，
+    保持一致，不因为新增了写接口就把明文存进去。
+    """
+    digits = "".join(character for character in phone if character.isdigit())
+    if len(digits) < 7:
+        return "*" * len(digits) if digits else "***"
+    return f"{digits[:3]}****{digits[-4:]}"
+
+
+def _build_create_order_result(order: Order, *, replay: bool) -> CreateOrderResultData:
+    """
+    Goal: 把订单实体转成创建订单的返回结构。首次创建与幂等重放共用，保证两者返回完全一致
+    """
+    delivery_method = "标准配送"
+    if "配送方式：" in (order.status_desc or ""):
+        delivery_method = order.status_desc.split("配送方式：", 1)[1].rstrip("。")
+    return CreateOrderResultData(
+        order_id=order.order_id,
+        status=order.status,
+        status_desc=order.status_desc,
+        amount=order.amount,
+        delivery_method=delivery_method,
+        created_at=order.created_at,
+        items=[
+            OrderItemData(
+                product_id=item.product.product_id if item.product else "",
+                title=item.title_snapshot,
+                quantity=item.quantity,
+                price=item.price,
+            )
+            for item in order.items
+        ],
+        idempotent_replay=replay,
+    )
 
 
 def _get_order_or_404(db: Session, order_id: str) -> Order:
@@ -392,9 +439,9 @@ def search_products(
         )
 
     if in_stock is True:
-        conditions.append(Product.stock_status.in_(_IN_STOCK_STATUSES))
+        conditions.append(Product.stock_quantity > 0)
     elif in_stock is False:
-        conditions.append(Product.stock_status.notin_(_IN_STOCK_STATUSES))
+        conditions.append(Product.stock_quantity <= 0)
 
     matched = db.query(Product).filter(*conditions)
     total = matched.count()
@@ -417,7 +464,8 @@ def search_products(
                     price=product.price,
                     cover_url=product.cover_url,
                     stock_status=product.stock_status,
-                    in_stock=_is_in_stock(product.stock_status),
+                    stock_quantity=product.stock_quantity,
+                    in_stock=_is_in_stock(product),
                     attributes=product.attributes_json or {},
                 )
                 for product in products
@@ -446,10 +494,131 @@ def product_detail(product_id: str, db: Session = Depends(get_db)):
             description=product.description,
             price=product.price,
             stock_status=product.stock_status,
+            stock_quantity=product.stock_quantity,
             cover_url=product.cover_url,
             attributes=product.attributes_json or {},
         )
     )
+
+
+@router.post(
+    "/orders",
+    response_model=ApiResponse,
+    tags=["订单"],
+    summary="创建订单",
+    description=(
+        "创建一笔订单并扣减库存。订单创建后状态为「待支付」——支付不在本服务范围内，"
+        "支付状态由业务中台后续回写。\n\n"
+        "**幂等**：请求体必须带 idempotency_key。同一个 key 重复提交只会产生一笔订单，"
+        "重复请求原样返回首次的结果，并把 data.idempotent_replay 置为 true，"
+        "调用方据此区分「下单成功」与「重复提交」。\n\n"
+        "库存不足、商品不存在、用户不存在都返回 4xx 且不产生订单，不会出现扣了库存却没建单的中间态。"
+    ),
+)
+def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
+    # 1. 幂等：先看这个 key 是不是已经建过单。
+    #    放在最前面，重复请求连库存都不碰。
+    existing = (
+        db.query(Order)
+        .options(joinedload(Order.items).joinedload(OrderItem.product))
+        .filter(Order.idempotency_key == body.idempotency_key)
+        .first()
+    )
+    if existing:
+        return _wrap(_build_create_order_result(existing, replay=True))
+
+    user = _get_user_or_404(db, body.user_id)
+
+    # 2. 合并同一商品的多行，避免同一 SKU 分两行绕过库存校验
+    wanted: dict[str, int] = {}
+    for item in body.items:
+        wanted[item.product_id] = wanted.get(item.product_id, 0) + item.quantity
+
+    # 3. 锁行读取。with_for_update 是这里的关键：并发下单必须串行化到同一行上，
+    #    否则两笔请求会各自读到「还有 1 件」然后各扣一件，把库存扣成负数。
+    products = (
+        db.query(Product)
+        .filter(Product.product_id.in_(wanted.keys()))
+        .with_for_update()
+        .all()
+    )
+    found = {product.product_id: product for product in products}
+
+    missing = sorted(set(wanted) - set(found))
+    if missing:
+        raise HTTPException(status_code=404, detail=f"商品 {'、'.join(missing)} 不存在。")
+
+    # 4. 先全量校验库存，再统一扣减——避免扣到一半发现不够，留下一堆被扣的库存
+    shortages = [
+        f"{found[pid].title}（需要 {qty} 件，仅剩 {found[pid].stock_quantity} 件）"
+        for pid, qty in wanted.items()
+        if found[pid].stock_quantity < qty
+    ]
+    if shortages:
+        raise HTTPException(status_code=409, detail=f"库存不足：{'；'.join(shortages)}。")
+
+    order_id = f"O{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
+    created_at = datetime.now()
+    order = Order(
+        order_id=order_id,
+        user_id=user.id,
+        status="待支付",
+        status_desc=f"订单已创建，等待支付。配送方式：{body.delivery_method}。",
+        amount=Decimal("0.00"),
+        created_at=created_at,
+        receiver_name=body.receiver_name,
+        receiver_phone_masked=_mask_phone(body.receiver_phone),
+        receiver_address=body.receiver_address,
+        idempotency_key=body.idempotency_key,
+    )
+    db.add(order)
+    try:
+        # INSERT 在 flush 时就发出，所以幂等键的唯一冲突会抛在这里而不是 commit。
+        # 整段写入都要包进来，只包 commit 挡不住并发的重复提交
+        db.flush()  # 拿到自增主键，供 order_items 的外键引用
+
+        amount = Decimal("0.00")
+        for item in body.items:
+            product = found[item.product_id]
+            amount += product.price * item.quantity
+            db.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=product.id,
+                    title_snapshot=product.title,  # 快照：商品改名后历史订单仍显示下单时的标题
+                    quantity=item.quantity,
+                    price=product.price,
+                )
+            )
+
+        # 5. 扣减库存，并同步派生的展示值，不让两者说两套话
+        for pid, qty in wanted.items():
+            product = found[pid]
+            product.stock_quantity -= qty
+            product.stock_status = _stock_label(product.stock_quantity)
+
+        order.amount = amount
+        db.commit()
+    except IntegrityError:
+        # 并发下的同一幂等键：两个请求都没查到既有订单，于是都走到这里插入，
+        # 唯一索引 uq_orders_idempotency_key 挡下了第二个。
+        # 这不是错误——调用方要的那笔订单确实已经存在了，回滚后按幂等重放返回，
+        # 不能把它变成 500 让调用方以为下单失败而重试（那才会真的下出第二笔）。
+        db.rollback()
+        winner = (
+            db.query(Order)
+            .options(joinedload(Order.items).joinedload(OrderItem.product))
+            .filter(Order.idempotency_key == body.idempotency_key)
+            .first()
+        )
+        if winner is None:
+            # 唯一冲突却查不到那笔订单，说明冲突来自别的约束，不能当幂等重放吞掉
+            raise
+        return _wrap(_build_create_order_result(winner, replay=True))
+
+    db.refresh(order)
+
+    return _wrap(_build_create_order_result(order, replay=False))
 
 
 @router.post(

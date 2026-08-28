@@ -1,11 +1,16 @@
 from typing import Any
 
 from business_agent.domain.state import DialogueState
-from business_agent.task.action.base import Action, ActionResult
+from business_agent.task.action.base import Action, ActionResult, SlotSpec
 from business_agent.task.action.customer.shared import fetch_order
 
 class ActionLookupOrderStatus(Action):
   name = "action_lookup_order_status"
+  description = "按订单号查询订单状态与金额、商品明细"
+  reads = (SlotSpec(name="order_number", description="要查询的订单号"),)
+  writes = ("order_status", "order_summary")
+  # 只读查询，不改变中台任何状态
+  is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """

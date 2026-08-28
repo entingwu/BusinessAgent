@@ -28,7 +28,11 @@ CREATE TABLE products (
     title           VARCHAR(255)   NOT NULL,
     description     TEXT           NOT NULL,
     price           DECIMAL(10, 2) NOT NULL,
+    -- stock_status 是面向展示的字符串（有货 / 缺货），stock_quantity 才是真实库存数量。
+    -- 两者并存而不是替换：下单要扣减数量，而现有读接口与前端仍在用 stock_status 展示。
+    -- 写入方必须同时维护两者，判定「有没有货」一律以 stock_quantity > 0 为准。
     stock_status    VARCHAR(32)    NOT NULL,
+    stock_quantity  INT            NOT NULL DEFAULT 0,
     cover_url       VARCHAR(500)   NULL,
     attributes_json JSON           NOT NULL,
     created_at      DATETIME       NOT NULL,
@@ -46,7 +50,11 @@ CREATE TABLE orders (
     receiver_name         VARCHAR(64)    NOT NULL,
     receiver_phone_masked VARCHAR(32)    NOT NULL,
     receiver_address      VARCHAR(255)   NOT NULL,
+    -- 幂等键：同一个 idempotency_key 重复下单只会产生一笔订单。
+    -- 允许 NULL 是为了兼容既有订单与非幂等来源；MySQL 的唯一索引允许多个 NULL。
+    idempotency_key       VARCHAR(64)    NULL,
     UNIQUE KEY uq_orders_order_id (order_id),
+    UNIQUE KEY uq_orders_idempotency_key (idempotency_key),
     KEY ix_orders_user_id (user_id),
     CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

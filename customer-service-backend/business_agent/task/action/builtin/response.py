@@ -15,6 +15,10 @@ from business_agent.chat_history.builder import ChatHistoryBuilder
 
 class ActionResponse(Action):
   name = "action_response"
+  description = "把 YAML 里配置的文案渲染成回复，可选让 LLM 改写或从零生成"
+  # 文案由 YAML 的 args 提供，不从槽位读固定入参（模板里引用哪些槽位由配置决定）；
+  # 它只产出回复，不写回任何槽位
+  is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """

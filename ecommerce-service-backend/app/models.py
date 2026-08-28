@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -33,7 +33,10 @@ class Product(Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    # stock_status 面向展示（有货 / 缺货），stock_quantity 是真实库存。
+    # 判定有没有货一律看 stock_quantity，stock_status 只是它的派生展示值。
     stock_status: Mapped[str] = mapped_column(String(32))
+    stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
     cover_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     attributes_json: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime)
@@ -52,6 +55,8 @@ class Order(Base):
     receiver_name: Mapped[str] = mapped_column(String(64))
     receiver_phone_masked: Mapped[str] = mapped_column(String(32))
     receiver_address: Mapped[str] = mapped_column(String(255))
+    # 幂等键：同一个 key 重复下单只产生一笔订单，重复请求原样返回首次的结果
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
 
     user: Mapped[User] = relationship(back_populates="orders")
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")

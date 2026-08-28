@@ -2,11 +2,15 @@ from datetime import datetime
 from typing import Any
 
 from business_agent.domain.state import DialogueState
-from business_agent.task.action.base import Action, ActionResult
+from business_agent.task.action.base import Action, ActionResult, SlotSpec
 from business_agent.task.action.customer.shared import fetch_logistics
 
 class ActionLookupLogistics(Action):
   name = "action_lookup_logistics"
+  description = "按订单号查询物流公司、运单号、当前进度与轨迹节点"
+  reads = (SlotSpec(name="order_number", description="要查询物流的订单号"),)
+  writes = ("tracking_number", "logistics_company", "logistics_status", "logistics_traces")
+  is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """
