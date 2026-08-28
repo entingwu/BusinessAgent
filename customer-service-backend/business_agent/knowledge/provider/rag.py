@@ -181,10 +181,17 @@ class KnowledgeRetriever:
       raise KnowledgeUnavailableError(error)
 
     chunks = [_to_chunk(match, provider_id) for match in (state.get("selected") or [])]
+    # rejected 与函数式那条对齐：被阈值挡掉的候选「差多少才够」是调阈值时唯一的数据来源，
+    # knowledge_repository 的注释也明写着来这行日志查。图路径漏掉它，那条承诺就不成立了。
+    selected_ids = {chunk.chunk_id for chunk in chunks}
+    rejected = [
+      {"chunk_id": match.id, "score": round(match.score, 4)}
+      for match in (state.get("matches_fused") or []) if match.id not in selected_ids
+    ][:5]
     logger.info(
-      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=graph outcome=%s hits=%s traces=%s",
+      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=graph outcome=%s hits=%s traces=%s rejected=%s",
       query_text, filters, top_k, state.get("outcome"), len(chunks),
-      [chunk.trace() for chunk in chunks],
+      [chunk.trace() for chunk in chunks], rejected,
     )
     return chunks
 

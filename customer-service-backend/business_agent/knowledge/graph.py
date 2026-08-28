@@ -64,6 +64,7 @@ class QueryGraphState(TypedDict, total=False):
   matches_fused: list[Any]
   selected: list[Any]
   outcome: str
+  scoring_degraded: bool
   error: str
   answer_chunks: list[Any]
 
@@ -153,8 +154,11 @@ class KnowledgeQueryGraph:
     try:
       scores = await rerank(state["question"], [match.document for match in matches])
     except RerankUnavailableError as error:
-      logger.warning("rerank_unavailable, keeping vector score: %s", error)
-      return {"matches_fused": matches}
+      # 退回向量分时必须同时退回**向量阈值**。只退分数不退阈值的话，下游会拿
+      # rerank_score_min（0.155 量级）去卡向量分（0.6-0.8 量级），阈值等于失效，
+      # 几乎任何提问都判成命中——「兜底不可能编造」就从拓扑性质退回成提示词遵从性。
+      logger.warning("rerank_unavailable, falling back to vector score AND vector threshold: %s", error)
+      return {"matches_fused": matches, "scoring_degraded": True}
     ranked = sorted(zip(matches, scores), key=lambda pair: pair[1], reverse=True)
     for match, score in ranked:
       match.score = score
@@ -168,7 +172,8 @@ class KnowledgeQueryGraph:
     if state.get("error"):
       return {"selected": [], "outcome": OUTCOME_UNAVAILABLE}
     matches = state.get("matches_fused") or []
-    if settings.rerank_enabled:
+    # scoring_degraded 表示 rerank 挂了、分数是向量分——此时必须用向量阈值判定
+    if settings.rerank_enabled and not state.get("scoring_degraded"):
       keep = cliff_cutoff([match.score for match in matches],
                           score_min=settings.rerank_score_min,
                           max_top_k=settings.knowledge_top_k)
