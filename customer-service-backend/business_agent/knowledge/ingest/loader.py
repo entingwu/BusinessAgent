@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from business_agent.config.settings import settings
+
 SUPPORTED_SUFFIXES = (".md", ".markdown", ".txt", ".csv")
 
 # FAQ and CSV: one entry per chunk, no semantic splitting. Documents go through recursive
@@ -43,14 +45,15 @@ class LoadedSource:
           policy.return_policy
       source_type: faq / document
       split_mode: entry / semantic
-      content_hash: hash of the source text, used to decide whether a re-ingest is needed
+      ingest_fingerprint: identifies the chunks this source would produce right now — see
+          _ingest_fingerprint. Ingest skips a source when this matches what is stored.
   """
   source_id: str
   source_type: str
   name: str
   file_path: str
   split_mode: str
-  content_hash: str
+  ingest_fingerprint: str
   entries: list[SourceEntry] = field(default_factory=list)
 
 
@@ -109,7 +112,6 @@ def load_source(root_dir: Path, file_path: Path) -> LoadedSource:
   Returns: LoadedSource
   """
   raw_text = file_path.read_text(encoding="utf-8")
-  content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
   source_id = build_source_id(root_dir, file_path)
   source_type = detect_source_type(root_dir, file_path)
 
@@ -133,13 +135,42 @@ def load_source(root_dir: Path, file_path: Path) -> LoadedSource:
     # Store the path **relative to the knowledge source root**, not an absolute one.
     # Absolute paths bake in whichever checkout ran the ingest — and when that checkout is a
     # temporary git worktree, deleting it leaves metadata pointing at a path that no longer
-    # exists, with nothing to catch it: ingest only compares content_hash and stats only counts
+    # exists, with nothing to catch it: ingest only compares the fingerprint and stats only counts
     # rows. A relative path is identical across every checkout, so the failure cannot happen.
     file_path=str(file_path.relative_to(root_dir)),
     split_mode=split_mode,
-    content_hash=content_hash,
+    ingest_fingerprint=_ingest_fingerprint(raw_text, split_mode),
     entries=entries,
   )
+
+
+def _ingest_fingerprint(raw_text: str, split_mode: str) -> str:
+  """
+  Goal: hash everything that decides what chunks this source turns into — not just the file.
+
+  This used to hash the source text alone, which made a whole class of change invisible:
+  swap the embedding model or edit KNOWLEDGE_CHUNK_SIZE and the file is byte-identical, so
+  ingest skips the source and leaves the old vectors in place. Nothing errors; retrieval
+  quietly runs on chunks built by settings that no longer exist. That is the same failure
+  shape as the empty-index skip — the succeeding and the failing path return the same thing.
+
+  Folding the parameters into the hash makes the re-ingest automatic instead of something
+  someone has to remember to force. It is deliberately over-inclusive: chunk size and overlap
+  do not affect entry-mode sources, but including them costs one needless re-embed while
+  leaving them out costs a silent stale index.
+  Args:
+      raw_text: the file's contents
+      split_mode: entry / semantic — changes the chunking, so it belongs in the hash
+  Returns: str — sha256 hex digest
+  """
+  material = "\x00".join([
+    raw_text,
+    split_mode,
+    settings.embedding_model,
+    str(settings.knowledge_chunk_size),
+    str(settings.knowledge_chunk_overlap),
+  ])
+  return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _load_csv(file_path: Path) -> tuple[str, list[SourceEntry]]:

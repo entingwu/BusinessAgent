@@ -81,14 +81,16 @@ npm install && npm run dev                    # http://127.0.0.1:5174
 
 2. **Budget real time for `uv sync`.** The RAG work added `chromadb`, `langchain-text-splitters` and the `[asyncio]` extra on `sqlalchemy`. The lock went from 63 packages to 115: Chroma drags in `onnxruntime`, `grpcio`, `tokenizers`, `numpy` and the whole `opentelemetry-*` set. That is a few hundred MB on first sync, not a few seconds.
 
-3. **Ingest with `--force`, and check the count.** Plain `ingest` will silently do nothing on a fresh checkout. The chunk metadata lives in **MySQL**, which everyone shares through the one container, but the Chroma index is a **local gitignored directory** that a fresh checkout does not have. `ingest` decides what to skip by comparing `content_hash` against the MySQL rows (`knowledge/ingest/pipeline.py:86-95`) and never checks whether the local vector store actually holds those vectors — so it reports every source `skipped`, exits successfully, and leaves you with an empty index. Every knowledge question then hits the miss fallback, which reads exactly like "the RAG work was never done".
+3. **Ingest, then check the count.** Plain `ingest` is enough — it rebuilds a fresh checkout on its own. The chunk metadata lives in **MySQL**, which everyone shares through the one container, while the vector index is a **local gitignored directory** a fresh checkout does not have; the two therefore disagree routinely. `_reindex_reason` (`knowledge/ingest/pipeline.py`) asks the index how many chunks it holds for each source and re-ingests unless that equals the metadata's `chunk_count`, so an empty or half-written index is repaired rather than skipped over.
+
+   The same decision also covers what the file's own hash cannot see: the fingerprint hashes the corpus text **together with** the embedding model, chunk size, overlap and split mode (`_ingest_fingerprint` in `knowledge/ingest/loader.py`). Change any of them and every source re-ingests by itself. `--force` remains for the case no fingerprint can catch — a suspected corrupt index.
 
    ```bash
-   uv run python -m business_agent.knowledge.ingest ingest --force
+   uv run python -m business_agent.knowledge.ingest ingest
    uv run python -m business_agent.knowledge.ingest stats
    ```
 
-   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (53 / 53 today; the number moves whenever the corpus changes, so compare the two figures rather than either against a remembered constant). This check exists because the metadata lives in the shared MySQL container while the index is local — it has already caught one case where another branch's ingest rewrote the shared table with a different embedding model, leaving everyone else's index silently mismatched. If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
+   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (53 / 53 today; the number moves whenever the corpus changes, so compare the two figures rather than either against a remembered constant). This check exists because the metadata lives in the shared MySQL container while the index is local — it has already caught one case where another branch's ingest rewrote the shared table with a different embedding model, leaving everyone else's index silently mismatched. If they differ, the index is not built, whatever the ingest output said. Any re-ingest re-embeds through the configured backend, so it needs network and a valid `LLM_API_KEY`.
 
 4. **Query them with `--default-character-set=utf8mb4`.** Without it the MySQL client renders `source_title` and the Chinese corpus as `?????`. The data is fine — the columns are `utf8mb4` — but the symptom looks exactly like a broken ingest, and it is easy to spend a round debugging the embedding pipeline over a client setting:
 
@@ -149,7 +151,8 @@ uv run python -m business_agent.task.action.builder      # actions registered?
 The knowledge base has its own CLI. It is **not** populated by starting the server — a fresh checkout retrieves nothing until you ingest:
 
 ```bash
-uv run python -m business_agent.knowledge.ingest ingest --force   # load → split → embed → index
+uv run python -m business_agent.knowledge.ingest ingest           # load → split → embed → index (skips only what is genuinely current)
+uv run python -m business_agent.knowledge.ingest ingest --force   # re-embed everything regardless
 uv run python -m business_agent.knowledge.ingest stats     # vector_chunks must equal metadata_chunks
 uv run python -m business_agent.knowledge.ingest query --text "退货运费谁承担"   # retrieval only, no LLM
 uv run python -m business_agent.knowledge.ingest calibrate  # re-derive the similarity threshold
@@ -248,9 +251,12 @@ succeeding path return the same thing**, so nothing tells you anything went wron
   chunks written, stats shows 0.
 - BSD `sed` (macOS) does not support `\b`. `s/\bcommerce\b/.../` silently matches nothing and
   exits 0 — which is how `DROP DATABASE` once landed on the shared `commerce` database.
-- `ingest` skips a source when `content_hash` is unchanged, without checking whether the local
-  vector store actually holds those vectors. On a fresh checkout it reports every source
-  `skipped`, exits 0, and leaves an empty index.
+- `ingest` used to skip on an unchanged `content_hash` without asking whether the local vector
+  store held those vectors, so a fresh checkout reported every source `skipped`, exited 0, and
+  left an empty index. Fixed in `9e96e69`/`_reindex_reason`, and worth keeping in view as the
+  shape rather than the instance: a hash over the inputs only is blind to everything downstream
+  of it. The same blindness covered the embedding model and chunk parameters until the
+  fingerprint absorbed them too.
 - FastAPI silently ignores query parameters it does not declare, so an old container answers
   `GET /products?attr=...` with 200 and every row — the filter looks like it worked.
 

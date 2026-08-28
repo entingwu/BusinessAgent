@@ -85,19 +85,8 @@ class IngestPipeline:
       if source_ids and source.source_id not in source_ids:
         continue
 
-      previous_hash = await repository.get_source_hash(source.source_id)
-      # Rows written before the relative-path change store an absolute path. content_hash has not
-      # changed, so the plain skip would leave new code running against old data — and nothing
-      # would warn about it. Detect the stale format and re-ingest that source automatically,
-      # rather than documenting "remember to run --force after merging".
-      previous_path = await repository.get_source_file_path(source.source_id)
-      stale_path_format = bool(previous_path) and Path(previous_path).is_absolute()
-      # The metadata says this source is indexed — but the metadata lives in a shared database
-      # while the vector index is a local gitignored directory. On a fresh clone the hashes match
-      # and the index is empty, so a plain skip reports success and leaves nothing to retrieve.
-      # Ask the index itself rather than trusting the hash.
-      indexed_chunks = await self._vector_client.count(source.source_id)
-      if not force and previous_hash == source.content_hash and not stale_path_format and indexed_chunks > 0:
+      reindex_reason = None if force else await self._reindex_reason(repository, source)
+      if not force and reindex_reason is None:
         report.results.append(SourceResult(
           source_id=source.source_id,
           source_type=source.source_type,
@@ -138,6 +127,44 @@ class IngestPipeline:
       chunk_count=removed_vectors,
       status="deleted",
     )
+
+  async def _reindex_reason(self, repository, source) -> str | None:
+    """
+    Goal: decide whether this source has to be re-ingested, and say why.
+
+    Every branch below is a failure that actually happened here, and they share one shape:
+    the stale path and the correct path both return success, so nothing tells you the index
+    is wrong. The point of naming a reason is that the reason ends up in the log — "skipped"
+    and "ingested" alone never explained themselves.
+    Args:
+        repository: knowledge repository
+        source: the freshly loaded source
+    Returns: str | None — None means genuinely up to date, safe to skip
+    Raises: VectorStoreUnavailableError — propagated on purpose. A backend that is down must
+        fail the ingest loudly rather than be read as "nothing is indexed, rebuild everything".
+    """
+    state = await repository.get_source_state(source.source_id)
+    if state is None:
+      return "never ingested"
+    if state.ingest_fingerprint != source.ingest_fingerprint:
+      # Covers the file's text and the parameters that shape its chunks — chunk size, overlap,
+      # split mode and the embedding model are all folded into the hash.
+      return "content or chunking parameters changed"
+    if state.file_path and Path(state.file_path).is_absolute():
+      # Rows written before the relative-path change store an absolute path that points into
+      # whichever checkout ran the ingest — often a deleted worktree.
+      return "stored path predates the relative-path change"
+    if state.embedding_model and state.embedding_model != get_embedding_backend().name:
+      # Belt and braces: the model is in the fingerprint too, but this row may predate that.
+      return f"embedding model changed ({state.embedding_model} -> {get_embedding_backend().name})"
+    # The metadata lives in a shared database while the vector index is a local gitignored
+    # directory, so the two disagree routinely — on a fresh clone the hash matches and the
+    # index is empty. Compare against chunk_count rather than >0, which also catches an
+    # ingest that died halfway and left a partial index behind.
+    indexed_chunks = await self._vector_client.count(source.source_id)
+    if indexed_chunks != state.chunk_count:
+      return f"index holds {indexed_chunks} chunks, metadata says {state.chunk_count}"
+    return None
 
   async def _ingest_one(self, repository: KnowledgeRepository, source: LoadedSource) -> int:
     """
@@ -185,7 +212,7 @@ class IngestPipeline:
       embedding_model=model_name,
       embedding_dimensions=settings.embedding_dimensions,
       chunk_count=len(chunks),
-      content_hash=source.content_hash,
+      ingest_fingerprint=source.ingest_fingerprint,
     )
     await repository.replace_chunks(source.source_id, [
       {

@@ -87,22 +87,27 @@ cp .env.example .env
 # Edit .env — at minimum set LLM_API_KEY and DATABASE_URL
 
 # 3. Build the knowledge index — see the warning below, this step is not optional
-uv run python -m business_agent.knowledge.ingest ingest --force
+uv run python -m business_agent.knowledge.ingest ingest
 uv run python -m business_agent.knowledge.ingest stats
 
 # 4. Run the service
 uv run python business_agent/api/main.py
 ```
 
-> **Skip step 3 and the knowledge track looks broken rather than unbuilt.** The vector index is a
-> local gitignored directory, so a fresh clone starts empty and *every* knowledge question falls
-> back to "I could not find that in the merchant's knowledge base" — which reads exactly like the
-> RAG work was never done.
+> **You do not need `--force` here, and an unbuilt index can no longer pass for an empty one.**
+> The vector index is a local gitignored directory, so a fresh clone starts with nothing in it
+> while the shared metadata database still lists every chunk. That combination used to be a trap:
+> plain `ingest` compared hashes, saw no change, reported every source `skipped` and exited 0.
 >
-> **Use `--force`.** Plain `ingest` decides what to skip by comparing `content_hash` against the
-> metadata database, and never checks whether the local vector store actually holds those vectors.
-> On a fresh clone against a populated shared database it reports every source `skipped`, exits 0,
-> and leaves you with an empty index.
+> Both halves are now closed in code. `ingest` asks the index how many chunks it actually holds
+> for each source and re-ingests when that disagrees with the metadata, so plain `ingest` rebuilds
+> a fresh clone on its own. And if a question does reach an empty index, retrieval raises instead
+> of returning no results — the agent says it cannot check right now and offers a human, rather
+> than claiming the answer is not in a knowledge base that in fact contains it.
+>
+> `--force` still has one job: it re-embeds unconditionally. Reach for it when you want to
+> rebuild for a reason the fingerprint cannot see — a suspected corrupt index, or a change
+> outside the corpus and settings.
 >
 > `stats` is the acceptance check, and it has exactly one criterion: **`vector_chunks` must equal
 > `metadata_chunks`.** They come from two independent places. If they differ, the index is not
@@ -262,7 +267,8 @@ Seven knowledge intents are defined in [`business_agent/knowledge/intents.py`](c
 The knowledge base has its own CLI — it is **not** populated by starting the server:
 
 ```bash
-uv run python -m business_agent.knowledge.ingest ingest --force   # load → split → embed → index
+uv run python -m business_agent.knowledge.ingest ingest           # re-ingests whatever the index or the settings say is stale
+uv run python -m business_agent.knowledge.ingest ingest --force   # re-embed everything regardless
 uv run python -m business_agent.knowledge.ingest stats            # vector_chunks must equal metadata_chunks
 uv run python -m business_agent.knowledge.ingest list             # sources, chunk counts, embedding model
 uv run python -m business_agent.knowledge.ingest query --text "who pays return shipping"   # retrieval only, no LLM
@@ -275,7 +281,7 @@ them useful: they separate "retrieval did not find it" from "retrieval found it 
 answered badly". Those two look identical in the chat window and have completely different fixes.
 
 **Editing the corpus voids the calibrated gate.** Re-titling a section is enough to shift the score
-distribution. After any change under `knowledge_source/`, re-run `ingest --force` then `calibrate`,
+distribution. After any change under `knowledge_source/`, re-run `ingest` then `calibrate`,
 and set the value it prints. Nothing errors if you skip it — retrieval simply mis-gates, which looks
 like an empty knowledge base or like the assistant answering things it should not.
 

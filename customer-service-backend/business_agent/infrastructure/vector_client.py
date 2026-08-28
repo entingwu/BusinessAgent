@@ -204,18 +204,19 @@ class ChromaVectorClient:
     Goal: how many chunks the index holds — the whole collection, or one source.
 
     The per-source form exists so ingest can tell "this source is already indexed" from
-    "the metadata says it is, but the local index does not have it". Those are the same
-    content_hash and completely different situations.
+    "the metadata says it is, but the local index does not have it". Those carry the same
+    ingest fingerprint and are completely different situations.
     Args: source_id: count only this source's chunks; None counts everything
     Returns: int
+    Raises: VectorStoreUnavailableError — the skip decision in ingest and the empty-index guard
+        in retrieval both depend on catching this. A backend that is down must not be
+        indistinguishable from an index that is empty.
     """
     collection = await self._call(self._get_collection)
     if source_id is None:
       return await self._call(collection.count)
     raw = await self._call(lambda: collection.get(where={"source_id": source_id}, include=[]))
     return len(raw.get("ids") or [])
-
-    return await self._call(_run)
 
   # ---------------- internals: thread-pool dispatch ----------------
 

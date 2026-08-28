@@ -151,9 +151,10 @@ class MilvusVectorClient:
         row[name] = (0 if name in ("position", "token_count") else "") if value is None else value
       rows.append(row)
     await self._call(lambda: client.upsert(collection_name=self._collection, data=rows))
-    # 必须 flush。不 flush 的话数据虽然写进去了、也能查到，但 get_collection_stats
-    # 的 row_count 恒为 0——「入库报成功、计数是 0」这个症状和 Chroma 那个
-    # content_hash 跳过坑一模一样，机制却完全不同，排查时极易走错方向。
+    # flush() is mandatory. Without it the vectors are written and searchable, but
+    # get_collection_stats keeps reporting row_count 0 — "ingest succeeded, count is 0" looks
+    # identical to the fingerprint skip trap while being a completely unrelated mechanism,
+    # which is exactly what sends you debugging the wrong half.
     await self._call(lambda: client.flush(self._collection))
     return len(rows)
 
@@ -216,22 +217,22 @@ class MilvusVectorClient:
     Goal: how many chunks the index holds — the whole collection, or one source.
 
     The per-source form exists so ingest can tell "this source is already indexed" from
-    "the metadata says it is, but the local index does not have it". Those are the same
-    content_hash and completely different situations.
+    "the metadata says it is, but the local index does not have it". Those carry the same
+    ingest fingerprint and are completely different situations.
     Args: source_id: count only this source's chunks; None counts everything
     Returns: int
+    Raises: VectorStoreUnavailableError — the skip decision in ingest and the empty-index guard
+        in retrieval both depend on catching this. A backend that is down must not be
+        indistinguishable from an index that is empty.
     """
     client = self._get_client()
+    # count(*) rather than get_collection_stats: the latter only reflects flushed segments and
+    # reports 0 for freshly written vectors, which reads exactly like a failed ingest.
+    expr = "position >= 0"
     if source_id is not None:
-      rows = await self._call(lambda: client.query(
-        collection_name=self._collection,
-        filter=f'source_id == "{escape_milvus_string(source_id)}"',
-        output_fields=["chunk_id"]))
-      return len(rows or [])
-    # 用 count(*) 查询而不是 get_collection_stats：后者只反映已 flush 的段，
-    # 刚写入未 flush 时会报 0，让人误以为入库失败。
+      expr = f'source_id == "{escape_milvus_string(source_id)}"'
     rows = await self._call(lambda: client.query(
-      collection_name=self._collection, filter="position >= 0", output_fields=["count(*)"]))
+      collection_name=self._collection, filter=expr, output_fields=["count(*)"]))
     if not rows:
       return 0
     first = rows[0]

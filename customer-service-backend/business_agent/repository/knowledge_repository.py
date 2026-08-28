@@ -41,7 +41,11 @@ class KnowledgeSourceRecord(Base):
   embedding_model: Mapped[str] = mapped_column(String(64), nullable=False)
   embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
   chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-  content_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+  # DB column stays `content_hash` on purpose: create_all never ALTERs, so renaming it would
+  # need a hand-run migration on every existing database. The Python name is the honest one —
+  # the value hashes the ingest parameters too, not just the file. See _ingest_fingerprint.
+  ingest_fingerprint: Mapped[str] = mapped_column(
+    "content_hash", String(64), nullable=False, default="")
   ingested_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_now)
 
 
@@ -175,6 +179,22 @@ async def ensure_tables(engine) -> None:
     )
 
 
+@dataclass(slots=True)
+class SourceState:
+  """
+  Goal: what a previous ingest left behind for one source, as the skip decision sees it
+  Attributes:
+      ingest_fingerprint: text + chunking + embedding model, hashed together
+      file_path: relative since the path change; an absolute value means a pre-change row
+      embedding_model: the model whose vectors are actually in the index
+      chunk_count: how many chunks that ingest wrote — compared against the live index
+  """
+  ingest_fingerprint: str
+  file_path: str
+  embedding_model: str
+  chunk_count: int
+
+
 class KnowledgeRepository:
   """Goal: read and write knowledge source / chunk metadata."""
 
@@ -190,7 +210,7 @@ class KnowledgeRepository:
                           embedding_model: str,
                           embedding_dimensions: int,
                           chunk_count: int,
-                          content_hash: str) -> None:
+                          ingest_fingerprint: str) -> None:
     """
     Goal: insert or update one knowledge source's metadata (idempotent on source_id)
     Args:
@@ -198,7 +218,7 @@ class KnowledgeRepository:
         embedding_model / embedding_dimensions: changing models forces a reindex, so they are
             persisted alongside the index
         chunk_count: how many chunks this ingest produced
-        content_hash: hash of the source text, used to decide whether a re-ingest is needed
+        ingest_fingerprint: hash of the text plus the parameters that shape the chunks
     """
     values = {
       "source_id": source_id,
@@ -208,7 +228,7 @@ class KnowledgeRepository:
       "embedding_model": embedding_model,
       "embedding_dimensions": embedding_dimensions,
       "chunk_count": chunk_count,
-      "content_hash": content_hash,
+      "content_hash": ingest_fingerprint,
       "ingested_at": _now(),
     }
     insert_stmt = insert(KnowledgeSourceRecord).values(**values)
@@ -246,30 +266,31 @@ class KnowledgeRepository:
     )
     return cursor.rowcount or 0
 
-  async def get_source_hash(self, source_id: str) -> str | None:
+  async def get_source_state(self, source_id: str) -> SourceState | None:
     """
-    Goal: read a source's content hash from its last ingest, so unchanged documents are skipped
-    Args:
-        source_id
-    Returns: str | None
-    """
-    cursor = await self._session.execute(
-      select(KnowledgeSourceRecord.content_hash).where(KnowledgeSourceRecord.source_id == source_id)
-    )
-    return cursor.scalar_one_or_none()
+    Goal: everything the skip decision needs about a previously ingested source, in one query.
 
-  async def get_source_file_path(self, source_id: str) -> str | None:
-    """
-    Goal: read the stored file_path so ingest can tell whether a row predates the
-          relative-path change. An absolute path means the row was written by the old code.
+    Previously this was two single-column round trips and the caller compared them inline.
+    Bundling them keeps the decision in one place — every field here exists because leaving
+    it out of the comparison produced a silent stale index at some point.
     Args:
         source_id
-    Returns: str | None
+    Returns: SourceState | None — None when this source was never ingested
     """
     cursor = await self._session.execute(
-      select(KnowledgeSourceRecord.file_path).where(KnowledgeSourceRecord.source_id == source_id)
+      select(
+        KnowledgeSourceRecord.ingest_fingerprint,
+        KnowledgeSourceRecord.file_path,
+        KnowledgeSourceRecord.embedding_model,
+        KnowledgeSourceRecord.chunk_count,
+      ).where(KnowledgeSourceRecord.source_id == source_id)
     )
-    return cursor.scalar_one_or_none()
+    row = cursor.first()
+    if row is None:
+      return None
+    return SourceState(
+      ingest_fingerprint=row[0], file_path=row[1] or "",
+      embedding_model=row[2] or "", chunk_count=int(row[3] or 0))
 
   async def list_sources(self) -> list[SourceSummary]:
     """

@@ -19,7 +19,7 @@ section — shifts the whole score distribution and voids the calibrated
 thresholds.** After any change here:
 
 ```bash
-uv run python -m business_agent.knowledge.ingest ingest --force
+uv run python -m business_agent.knowledge.ingest ingest
 uv run python -m business_agent.knowledge.ingest calibrate
 ```
 
@@ -57,17 +57,18 @@ process steps, platform rules.
 
 ```bash
 # customer-service-backend/
-uv run python -m business_agent.knowledge.ingest ingest          # skips sources whose content_hash is unchanged
-uv run python -m business_agent.knowledge.ingest ingest --force  # re-embeds everything
+uv run python -m business_agent.knowledge.ingest ingest          # skips only sources whose text, chunking settings, model and indexed count all still agree
+uv run python -m business_agent.knowledge.ingest ingest --force  # re-embeds everything regardless
 uv run python -m business_agent.knowledge.ingest stats           # vector_chunks must equal metadata_chunks
 uv run python -m business_agent.knowledge.ingest list
 uv run python -m business_agent.knowledge.ingest delete --source-id policy.return_policy
 uv run python -m business_agent.knowledge.ingest query --text "七天无理由怎么退"
 ```
 
-> On a fresh checkout, use `--force`. Chunk metadata lives in the shared MySQL
-> instance while the Chroma index is a local gitignored directory, and the skip
-> logic only compares `content_hash` against MySQL — it never checks whether the
-> local vector store actually holds those vectors. Plain `ingest` will then report
-> every source `skipped`, exit 0, and leave you with an empty index. The only
-> reliable check is `stats`: `vector_chunks` must equal `metadata_chunks`.
+> Plain `ingest` is enough after editing this corpus, and on a fresh checkout too.
+> The skip decision compares the live index's chunk count for each source against
+> the metadata, and the fingerprint it hashes covers the chunking settings and the
+> embedding model as well as the file's bytes — so a corpus edit, a resized chunk
+> or a swapped model all re-ingest on their own. `--force` is for the case none of
+> that can see, such as a suspected corrupt index. Either way, confirm with
+> `stats`: `vector_chunks` must equal `metadata_chunks`.
