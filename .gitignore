@@ -44,3 +44,6 @@ yarn-error.log*
 # ===== macOS =====
 .DS_Store
 .claude/worktrees/
+
+# 无关的独立项目，不属于本仓库
+knowledge_base/
