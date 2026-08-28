@@ -71,7 +71,14 @@ npm install && npm run dev                    # http://127.0.0.1:5174
 
    One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (45 / 45 today). If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
 
-4. **The three knowledge tables create themselves — do not write a migration.** `knowledge_sources`, `knowledge_chunks` and `retrieval_traces` are created by `ensure_tables()` (`repository/knowledge_repository.py:146-158`), which the ingest CLI runs and the server runs once per process on its first retrieval. It is a whitelisted `create_all` and never touches `dialogue_states`. Two consequences: `create_all` only CREATEs — **adding a column to one of those models will not alter an existing table**, you have to `ALTER` by hand; and these tables are exactly what `docker compose down -v` destroys with nothing in the repo able to recreate them.
+4. **Query them with `--default-character-set=utf8mb4`.** Without it the MySQL client renders `source_title` and the Chinese corpus as `?????`. The data is fine — the columns are `utf8mb4` — but the symptom looks exactly like a broken ingest, and it is easy to spend a round debugging the embedding pipeline over a client setting:
+
+   ```bash
+   docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set=utf8mb4 custom_service \
+     -e "SELECT chunk_id, source_title, score, selected, drop_reason FROM retrieval_traces ORDER BY id DESC LIMIT 10"
+   ```
+
+5. **The three knowledge tables create themselves — do not write a migration.** `knowledge_sources`, `knowledge_chunks` and `retrieval_traces` are created by `ensure_tables()` (`repository/knowledge_repository.py:146-158`), which the ingest CLI runs and the server runs once per process on its first retrieval. It is a whitelisted `create_all` and never touches `dialogue_states`. Two consequences: `create_all` only CREATEs — **adding a column to one of those models will not alter an existing table**, you have to `ALTER` by hand; and these tables are exactly what `docker compose down -v` destroys with nothing in the repo able to recreate them.
 
 ### Running individual modules — the `-m` rule
 
