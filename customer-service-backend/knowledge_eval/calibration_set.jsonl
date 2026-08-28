@@ -25,7 +25,7 @@
 {"question": "这款鞋子现在卖多少钱", "expect": "miss", "kind": "absent"}
 {"question": "帮我推荐一台适合剪视频的笔记本", "expect": "miss", "kind": "absent"}
 {"question": "怎么开增值税发票", "expect": "miss", "kind": "absent"}
-{"question": "支持货到付款吗", "expect": "miss", "kind": "absent"}
+{"question": "支持货到付款吗", "expect": "hit", "kind": "present", "note": "原为 absent 用例。2026-08-28 补了支付方式 FAQ 后语料里有了答案，据实改为 hit——不改的话等于拿一条已经能答的问题继续当兜底基准"}
 {"question": "会员等级怎么升级", "expect": "miss", "kind": "absent"}
 {"question": "积分可以抵多少钱", "expect": "miss", "kind": "absent"}
 {"question": "我想入驻开店需要什么资质", "expect": "miss", "kind": "absent"}
