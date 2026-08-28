@@ -31,6 +31,58 @@ SLOT_TO_ATTR: dict[str, str] = {
 # per round actually converges.
 MAX_CARDS = 4
 
+# Display labels for the commerce service's stock_status values.
+#
+# stock_status stays Chinese **in the database on purpose**, and this map is the reason it can.
+# Two places in the commerce service treat it as a matching key rather than as text:
+#   - the stock decrement writes `_IN_STOCK_LABEL = "有货"` back on every order placed;
+#   - 2026-08-28-stock-quantity-and-order-idempotency.sql carries an unconditional
+#     `UPDATE products SET stock_status = IF(stock_quantity > 0, '有货', '缺货')`, and migrations
+#     here are re-run on purpose whenever anyone is unsure.
+# Translating the column therefore does not stay translated, and nothing warns you when it
+# reverts.
+#
+# Mapping at display time instead is immune to both: the stored value never moves, so both of
+# those keep matching. It is the same pattern the front end already uses for order status
+# (ORDER_STATUS_LABEL in App.vue), which is why statuses read "In transit" in the UI while the
+# database still says 运输中.
+#
+# An unknown value falls through unchanged rather than being blanked — showing 有货 to an English
+# user is a small blemish; showing nothing hides whether the item is in stock at all.
+STOCK_STATUS_LABELS: dict[str, str] = {
+  "有货": "In stock",
+  "缺货": "Out of stock",
+  "现货": "In stock",
+  "有库存": "In stock",
+}
+
+# Display labels for the attribute *values* used as filters.
+#
+# The values themselves stay Chinese everywhere they function as keys — in STYLE_VALUES below, in
+# the slot descriptions in user_flows.yml, in the quick-reply buttons, and in the commerce
+# catalogue — because they are written verbatim into product_style / product_use_case and sent on
+# as an attribute filter. Translate one side without the other and every search returns nothing,
+# which looks exactly like "there really is no matching product".
+#
+# But those same values also end up inside a sentence shown to the user ("Here is what I found
+# for use case 办公"), and there the Chinese is just a blemish. So they are mapped at the point of
+# display only, the same trick as STOCK_STATUS_LABELS above: the stored and transmitted value
+# never moves, so nothing that matches on it can break.
+#
+# An unmapped value falls through unchanged rather than being dropped — a new catalogue value
+# should look untranslated, not invisible.
+ATTRIBUTE_VALUE_LABELS: dict[str, str] = {
+  # use_case
+  "办公": "office", "差旅": "travel", "居家": "home", "游戏": "gaming",
+  "运动": "sports", "通勤": "commuting", "健身": "fitness",
+  # style
+  "极简": "minimalist", "商务": "business", "北欧": "Nordic",
+  "电竞": "esports", "复古": "retro",
+  # size
+  "标准": "standard", "大号": "large", "小号": "small",
+}
+
+
 # Candidate values for the refinement buttons. They offer values, never dimension names — see
 # the comment on wait_more in user_flows.yml. The values come from the allowed list in each
 # slot's description, which the planner recognises.
@@ -186,13 +238,17 @@ class ActionRecommendProducts(Action):
         "price": item.get("price"),
         "cover_url": item.get("cover_url"),
         "description": self._describe(item, attributes),
-        "stock_status": item.get("stock_status"),
+        # The card carries the display label, not the raw value: nothing downstream matches on
+        # this field, and the raw value is still what the commerce service filters by
+        "stock_status": STOCK_STATUS_LABELS.get(
+          str(item.get("stock_status") or "").strip(), item.get("stock_status")),
         **{key: value for key, value in attributes.items() if key in ("use_case", "style", "color", "size")},
       },
     )
 
   def _describe(self, item: dict[str, Any], attributes: dict[str, Any]) -> str:
-    parts = [str(item.get("stock_status") or "").strip()]
+    raw_stock = str(item.get("stock_status") or "").strip()
+    parts = [STOCK_STATUS_LABELS.get(raw_stock, raw_stock)]
     spec = str(attributes.get("spec") or "").strip()
     if spec:
       # spec is free text and can be long; the card has no room, so take the first segment
@@ -226,9 +282,9 @@ class ActionRecommendProducts(Action):
             "Want to raise the budget, or try a different style?")
 
   def _condition_text(self, attrs: dict[str, str], max_price: float | None) -> str:
-    # Labels in English; the values stay as commerce stores them (see the STYLE_VALUES note above)
     labels = {"use_case": "use case", "style": "style", "size": "size"}
-    parts = [f"{labels.get(key, key)} {value}" for key, value in attrs.items()]
+    parts = [f"{labels.get(key, key)} {ATTRIBUTE_VALUE_LABELS.get(value, value)}"
+             for key, value in attrs.items()]
     if max_price is not None:
       parts.append(f"under {max_price:.0f}")
     return "for " + ", ".join(parts) if parts else "matching your request"

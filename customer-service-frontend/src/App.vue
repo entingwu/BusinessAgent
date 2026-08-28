@@ -354,6 +354,7 @@ function formatAmount(amount) {
 }
 
 const ORDER_STATUS_CLASS = {
+  '待支付': 'status-warning',
   '待发货': 'status-warning',
   '待揽收': 'status-warning',
   '运输中': 'status-info',
@@ -372,6 +373,7 @@ function getStatusClass(status) {
 /* 订单状态由业务中台返回, 值是中文。这里只做展示层翻译,
    查表的键必须保持中文原值, 未知状态原样显示。 */
 const ORDER_STATUS_LABEL = {
+  '待支付': 'Awaiting payment',
   '待发货': 'Awaiting shipment',
   '待揽收': 'Awaiting pickup',
   '运输中': 'In transit',

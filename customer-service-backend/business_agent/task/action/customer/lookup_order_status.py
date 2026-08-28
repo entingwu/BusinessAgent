@@ -47,8 +47,17 @@ class ActionLookupOrderStatus(Action):
                 for item in items[:2] if item.get("title")]
       if titles:
         parts.append("Items: " + ", ".join(titles))
-    # The Chinese values from the commerce service use fullwidth punctuation, so joining them
-    # with ASCII "." and "," produced the half-and-half look of
-    # 「订单金额 ￥899.00.商品: 耳机.」
-    return "，".join(parts) + "。" if parts else ""
+    # ASCII punctuation for the joins. The ￥ symbol stays: App.vue's formatAmount renders card
+    # amounts as ￥, and a reply saying "CNY 899.00" next to a card saying "￥899.00" on the same
+    # screen is worse than either alone.
+    #
+    # This line used to be the other way round: it joined with fullwidth ， and 。 because the
+    # values coming from the commerce service were Chinese, and ASCII punctuation between them
+    # produced the half-and-half look of 「订单金额 ￥899.00.商品: 耳机.」. The englishification of
+    # the catalogue's display columns inverted that — with English titles, fullwidth joiners now
+    # produce "Order total ￥899.00，Items: Earbuds。", which is the same blemish mirrored.
+    #
+    # Worth noting as a pattern: a comment that records *why* something was chosen becomes wrong
+    # the moment the reason changes, and nothing flags it. Grep for the reason, not just the code.
+    return ", ".join(parts) + "." if parts else ""
     

@@ -45,6 +45,18 @@ Flow command semantics:
   business flow.
 - `resume_flow`: use it when the user says things like "continue", "go on", "pick up the earlier
   request". Name the flow with `flow` when the user specified one; omit `flow` when they did not.
+- `cancel_flow`: use it **only when the user explicitly abandons** the request in progress —
+  "never mind", "forget it", "cancel that", "I don't want to do this any more".
+
+**Do not emit `cancel_flow` just because the user turns to something else.** Starting a different
+flow while one is running is already an interruption: the engine pauses the running task, puts it
+on a stack, and can resume it later. `cancel_flow` destroys it instead, and then there is nothing
+left to resume.
+
+So for "wait, check order o30003 first" or "hold on, what's the status of o30003", the correct
+output is `start_flow` alone — the user is interleaving, not abandoning. Emitting `cancel_flow`
+there means that when they say "continue the refund" a moment later, they are told there is
+nothing to pick up.
 
 Slot extraction rules:
 - Each flow's `slots` is the only list of slots that flow may use.

@@ -80,7 +80,7 @@ npm install && npm run dev                    # http://127.0.0.1:5174
    uv run python -m business_agent.knowledge.ingest stats
    ```
 
-   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (45 / 45 today). If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
+   One acceptance check: **`vector_chunks` must equal `metadata_chunks`** (45 / 45 today). This check exists because the metadata lives in the shared MySQL container while the index is local — it has already caught one case where another branch's ingest rewrote the shared table with a different embedding model, leaving everyone else's index silently mismatched. If they differ, the index is not built, whatever the ingest output said. `--force` re-embeds every chunk through DashScope, so it needs network and a valid `LLM_API_KEY`.
 
 4. **Query them with `--default-character-set=utf8mb4`.** Without it the MySQL client renders `source_title` and the Chinese corpus as `?????`. The data is fine — the columns are `utf8mb4` — but the symptom looks exactly like a broken ingest, and it is easy to spend a round debugging the embedding pipeline over a client setting:
 
@@ -195,7 +195,14 @@ Leftover from earlier work, safe to remove when touching that file: the `/test` 
 - **Python uses 2-space indentation**, not 4. Match it.
 - Docstrings follow a `Goal:` / `Args:` / `Returns:` convention.
 - **Comments and docstrings are English.** They used to be mixed Chinese and English with the rule "match the surrounding block"; that rule is gone, and writing new Chinese comments re-opens the mix. The migration is tracked as tier A of the englishification work — until it finishes you will still meet Chinese comments in untouched files, so translate the ones you edit rather than matching them.
-- **Some Chinese is load-bearing and must not be translated.** Product attribute values (`办公`, `极简`, …) in `flow_config/user_flows.yml` and `STYLE_VALUES` in `recommend_products.py` are matching keys sent to the commerce service, which stores `"use_case": "办公"`; order status values (`待发货`, `运输中`, …) are lookup keys in the frontend's `ORDER_STATUS_CLASS`. Translating either half without the other returns an empty result set — indistinguishable from "no matching products" — so it fails silently. Both are commented in place.
+- **Some Chinese is load-bearing and must not be translated.** Three columns and one constant are matching keys, not display text:
+  - `products.stock_status` (`有货` / `缺货`) — the stock decrement writes `_IN_STOCK_LABEL = "有货"` back on every order, and `2026-08-28-stock-quantity-and-order-idempotency.sql` carries an unconditional `UPDATE ... SET stock_status = IF(...)`.
+  - `orders.status` (`待发货`, `运输中`, …) — `app/api.py` gates the shipping-reminder endpoint on `order.status not in {"待发货", "待揽收"}`. Translate the column and that endpoint returns 400 for **every** order, without raising anything.
+  - product attribute values (`办公`, `极简`, …) in `flow_config/user_flows.yml`, `STYLE_VALUES` in `recommend_products.py`, and the quick-reply buttons — a button's label *is* the text sent back to the planner, which writes it verbatim into the slot and on to the commerce attribute filter.
+
+  All of these are englishified **at display time instead**: `ORDER_STATUS_LABEL` in `App.vue`, and `STOCK_STATUS_LABELS` / `ATTRIBUTE_VALUE_LABELS` in `recommend_products.py`. The stored value never moves, so everything that matches on it keeps working — which also means it stays correct against any matching site nobody grepped for. Quick-reply buttons are the one place where display and value cannot diverge under the current protocol, so they are still Chinese in the UI.
+
+- **Catalogue display columns are English** (`2026-08-28-englishify-display-fields.sql`): product titles and descriptions, `attributes_json.spec` / `.brand`, order and shipping status descriptions, tracking events, carrier names, receiver names and addresses. **That migration must run after `2026-08-27-unify-product-attributes.sql`**, which writes Chinese values back unconditionally; re-running the englishify script is the repair, and its product UPDATEs match on `product_id` alone so the repair always works.
 - Domain models are `@dataclass(slots=True)` with hand-written `to_dict()` / `from_dict()` pairs (not `asdict`) — when adding a field to a domain model, update **both** methods or it silently vanishes on the next state load.
 - API models are Pydantic; domain models are dataclasses. The two are converted explicitly in `api/chat_router.py` — never leak a Pydantic model past the router.
 - Configuration is environment-driven through `config/settings.py`; a missing key fails startup immediately by design. Add new settings there, and to `.env.example`.
