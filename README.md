@@ -158,32 +158,45 @@ The e-commerce service exposes `/health`, `/orders/{id}`, `/orders/{id}/status`,
 | `GET` | `/` | Health check |
 | `POST` | `/api/chat` | Main chat entry point; takes `sender_id` + `text` (or `object` when the user clicks a card) |
 | `GET` | `/api/chat/history?sender_id=` | Full chat history across all of that user's sessions |
+| `GET` | `/api/session/state?sender_id=` | Current flow, step, slots and control ownership (spec 4.2) |
+| `POST` | `/api/handoff` | A human agent `claim`s the session or `release`s it back to the agent |
 | `GET` | `/docs` | Swagger UI |
 
-Request/response models for `POST /api/chat` are defined in [`business_agent/api/schemas.py`](customer-service-backend/business_agent/api/schemas.py).
+Request/response models are defined in [`business_agent/api/schemas.py`](customer-service-backend/business_agent/api/schemas.py).
+
+`POST /api/handoff` is the other half of the gate at the top of the architecture diagram: `claim` sets `control_owner` to `HUMAN`, after which the agent stops replying while still recording what the user says. `release` hands the session back. Tier one only flips ownership — the handoff package (history, slots, tool results) is tier-two work.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A["POST /api/chat"] --> B["DialogueStateService<br/>load DialogueState from MySQL"]
-    B --> C["DialogueEngine<br/>open session / begin turn"]
-    C --> D{"Message type"}
-    D -->|text| E["TurnPlanner<br/>LLM plans the turn"]
-    D -->|card click| F["build SetSlotsCommand"]
-    E --> G["TurnPlanValidator<br/>validate the plan"]
-    G -->|invalid| H["ClarifyResponder<br/>ask for clarification"]
+    A["POST /api/chat"] --> B["DialogueStateService: load state"]
+    B --> C{"control_owner is HUMAN?"}
+    C -->|"yes: agent stays silent"| Z["persist DialogueState"]
+    C -->|no| D{"message type"}
+
+    D -->|"card click"| F["SetSlotsCommand (no LLM call)"]
+    D -->|text| E["TurnPlanner (one LLM call)"]
+    E --> G{"TurnPlanValidator"}
+    G -->|invalid| H["ClarifyResponder"]
     G -->|task| I["TaskHandler"]
     G -->|knowledge| J["KnowledgeHandler"]
     G -->|chitchat| K["ChitChatHandler"]
     F --> I
-    I --> L["CommandProcessor mutates state<br/>→ FlowExecutor advances the flow<br/>→ ActionRunner executes actions"]
-    J --> M["KnowledgeRegister<br/>api.order / api.product / faq / rag"]
-    L --> N["persist DialogueState back to MySQL"]
-    M --> N
-    K --> N
-    H --> N
-    N --> O["ChatResponse"]
+
+    I --> I1["CommandProcessor: start / set_slots / resume / cancel"]
+    I1 --> I2["FlowExecutor: advance one step"]
+    I2 --> I3["ActionRunner: run one action"]
+
+    J --> J1{"retrieval hit?"}
+    J1 -->|"no: fixed text, no LLM call"| Z
+    J1 -->|yes| J2["KnowledgeResponder: answer from the chunks only"]
+
+    I3 --> Z
+    J2 --> Z
+    K --> Z
+    H --> Z
+    Z --> Y["ChatResponse"]
 ```
 
 Responsibilities are split across three layers:
@@ -191,6 +204,12 @@ Responsibilities are split across three layers:
 - **API layer** (`business_agent/api/`) only converts between API models and domain models
 - **Service layer** (`business_agent/services/`) owns the state load/save boundary
 - **Engine layer** (`business_agent/engines/`) is pure state computation and touches no I/O
+
+Three properties in the diagram are load-bearing rather than incidental, and each one is a decision:
+
+- **The handoff gate sits ahead of planning** (`engines/dialogue_engine.py`). Once a human owns the session the message is still persisted — the agent on the other side needs to see what the user said — but it never reaches the planner, so not even intent recognition runs.
+- **A card click never calls the LLM.** A tapped card carries an id, and the only question is whether the step the flow is waiting on can accept it; that is a lookup, not a judgement.
+- **A retrieval miss returns before the LLM chain is built.** The fallback wording is a constant in `knowledge/responder.py`, so a miss cannot fabricate — the guarantee is in the control flow, not in prompt wording.
 
 Sessions expire after 1 hour of inactivity: the old session is closed, runtime state is reset, and a new session starts (history is preserved).
 
@@ -238,15 +257,23 @@ customer-service-backend/
 │   ├── engines/        Dialogue engine + dependency wiring (builder.py)
 │   ├── plan/           LLM turn planning and validation
 │   ├── task/           Task track: flows / commands / action
-│   ├── knowledge/      Knowledge track: intents + providers
+│   ├── knowledge/      Knowledge track: intents, providers, ingest pipeline, traces
 │   ├── chitchat/       Chitchat track
 │   ├── clarify/        Clarification prompts
+│   ├── handoff/        Control ownership and the handoff trigger rules
+│   ├── chat_history/   Renders past turns into the planner's context window
 │   ├── domain/         Domain models: messages, contexts, dialogue state
 │   ├── repository/     SQLAlchemy persistence
-│   ├── infrastructure/ DB / HTTP / LLM clients
+│   ├── infrastructure/ DB / HTTP / LLM / vector clients
 │   ├── prompt/         Jinja2 prompt templates
-│   └── config/         Settings
-└── flow_config/        Flow YAML
+│   ├── config/         Settings
+│   ├── observability.py  Log configuration and the one-line argument formatter
+│   └── test/           One hand-written SQLAlchemy demo script — not a test suite
+├── flow_config/        Flow YAML
+├── knowledge_source/   The retrieval corpus: policy documents and the FAQ
+├── knowledge_eval/     Calibration set and the recorded baseline for the threshold
+├── knowledge_store/    Local vector index — gitignored, so each checkout builds its own
+└── scripts/            enable_milvus_rag.sh, the one-command retrieval-chain switch
 
 customer-service-frontend/
 ├── src/App.vue         Chat UI, history, order/product sidebar
@@ -276,10 +303,17 @@ Prompt templates live in `business_agent/prompt/jinja2/` (`turn_plan` / `knowled
 | --- | --- |
 | `commerce-api` | `ecommerce-service-backend/` — endpoints and schema |
 | `knowledge-rag` | `knowledge/` — the RAG and FAQ chain |
-| `frontend-cleanup` | `customer-service-frontend/` — deletion passes |
+| `frontend` | `customer-service-frontend/` — protocol rendering, interaction, visuals |
 | `spec-auditor` | Read-only; audits code against the spec's acceptance criteria |
 
 There is deliberately no agent for `domain/` + `api/` (the message-protocol spine) or `task/flows/` (the flow state machine). Both are easy to break by redesign and are kept in the main session.
+
+**Run an audit against a pinned commit, in its own worktree.** `git worktree add --detach <commit>` and tell the auditor to read only that path. Not because an audit writes anything — it does not — but because it needs its subject to hold still: a `git pull` in the shared workspace halfway through one produced a report that looked entirely normal and was measured against two different versions of the code. Development that gets interrupted is redone; an audit that gets interrupted yields a wrong report with no symptom.
+
+**Two things bite when several sessions run at once**, and both have already happened here:
+
+- **`.env` is shared on disk while branches are not.** A branch behind `main` starts failing against it the moment another branch adds a setting — `extra='forbid'` turns the new key into an import-time crash that reads like broken code. The fix is to rebase, not to edit `.env`.
+- **Kill by port, never by pattern.** `pkill -f business_agent/api/main.py` matches every session's backend; `kill $(lsof -ti:<port>)` matches one. For the same reason, give a worktree its own `APP_PORT` — copying `.env` from the main checkout hands it a port a colleague is already holding.
 
 Two conventions worth knowing before editing: **Python here uses 2-space indentation** in `customer-service-backend/` but 4-space in `ecommerce-service-backend/`, and domain models carry hand-written `to_dict()` / `from_dict()` pairs — add a field to one without the other and it vanishes silently on the next state load.
 
