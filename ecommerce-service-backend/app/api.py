@@ -48,6 +48,15 @@ router = APIRouter()
 
 # stock_quantity 才是真实库存，stock_status 只是它的派生展示值。
 # 判定「有没有货」一律以数量为准；这两个常量仍保留，用于写回展示值。
+# 订单状态是**匹配键，不是展示文本**。定下来的做法：数据库里的值保持中文，
+# 前端 ORDER_STATUS_LABEL / ORDER_STATUS_CLASS 以它为键映射成英文展示。
+# 所以这里的字面量不要翻译——翻了就再也匹配不上任何一行。
+#
+# 抽成具名常量是为了让这个依赖能被 grep 到。原来它是内联字面量，
+# 而它的失败形态是静默的：值一旦对不上，这个端点对任何订单都返回 400，
+# 不报错、不崩，只是永远拒绝。「两处独立事实、两处都不报警」是这个仓里反复出现的形态。
+_SHIPPABLE_STATUSES = frozenset({"待发货", "待揽收"})
+
 _IN_STOCK_LABEL = "有货"
 _OUT_OF_STOCK_LABEL = "缺货"
 
@@ -694,7 +703,7 @@ def create_shipping_reminder(
     db: Session = Depends(get_db),
 ):
     order = _get_order_or_404(db, order_id)
-    if order.status not in {"待发货", "待揽收"}:
+    if order.status not in _SHIPPABLE_STATUSES:
         raise HTTPException(
             status_code=400,
             detail=f"订单当前状态为“{order.status}”，当前不适合再次发起发货提醒。",

@@ -51,6 +51,10 @@ WHERE stock_quantity = 0 AND stock_status IN ('有货', '现货', '有库存');
 
 -- 3. 让 stock_status 与数量对齐。放在回填之后，且回填是自愈的，
 --    所以这一步不会再在中断后覆盖掉唯一的事实源。
+--
+--    这行写死了中文字面量，且是无条件 UPDATE：任何把 stock_status 翻成英文的改动，
+--    只要之后有人重跑这个脚本（脚本被设计成可重跑，没有版本表拦着），就会被这行改回中文。
+--    展示值一律走前端映射、数据库保持中文，是有意为之——见 app/api.py 的 _SHIPPABLE_STATUSES。
 UPDATE products SET stock_status = IF(stock_quantity > 0, '有货', '缺货');
 
 -- 4. orders.idempotency_key
