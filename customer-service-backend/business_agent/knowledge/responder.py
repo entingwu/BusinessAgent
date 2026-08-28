@@ -74,6 +74,9 @@ class KnowledgeResponder:
         #    落一行 outcome=no_hit 的溯源记录，事后能回答「这一轮为什么兜底了」
         if not selected:
             logger.info("knowledge_respond fallback=no_hit candidates=%s", len(chunks))
+            # 连续未命中是「Agent 答不了」的信号，累计到阈值触发转人工（规范 3.3.4）。
+            # 这里是唯一知道本轮命中与否的地方，所以计数在此更新
+            state.note_knowledge_miss(missed=True)
             await self._trace_recorder.record(
                 state,
                 outcome=OUTCOME_NO_HIT,
@@ -81,6 +84,9 @@ class KnowledgeResponder:
                 dropped=dropped,
             )
             return [BotMessage(text=FALLBACK_NO_HIT_TEXT)]
+
+        # 命中，连续未命中计数清零
+        state.note_knowledge_miss(missed=False)
 
         # 3. 内部记录命中的分片 ID 与相似度，回复可溯源：日志 + retrieval_traces 表
         logger.info(
@@ -129,6 +135,8 @@ class KnowledgeResponder:
         Returns: list[BotMessage]
         """
         logger.warning("knowledge_respond fallback=unavailable sender_id=%s error=%s", state.sender_id, error)
+        # 降级与未命中对用户是同一件事——问了但没得到答案，同样计入转人工阈值
+        state.note_knowledge_miss(missed=True)
         await self._trace_recorder.record(
             state,
             outcome=OUTCOME_UNAVAILABLE,
