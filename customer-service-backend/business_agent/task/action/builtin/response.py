@@ -5,7 +5,7 @@ from jinja2 import Template
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from business_agent.domain.messages import BotMessage
+from business_agent.domain.messages import BotMessage, Suggestion
 from business_agent.domain.state import DialogueState
 from business_agent.infrastructure.db_client import main_test
 from business_agent.task.action.base import Action, ActionResult
@@ -44,7 +44,7 @@ class ActionResponse(Action):
     # Quick-reply buttons: available in all three modes. They are never sent through the LLM
     # rewrite, because a button label has to line up with the intent set, and letting the model
     # polish it produces wording the planner no longer recognises.
-    suggestions = list(action_kwargs.get('suggestions') or [])
+    suggestions = [Suggestion.coerce(item) for item in (action_kwargs.get('suggestions') or [])]
 
     # 1. Read the response mode
     mode = action_kwargs.get('mode', 'static')

@@ -91,6 +91,52 @@ class UserMessage:
     )
 
 @dataclass(slots=True)
+class Suggestion:
+  """
+  One quick-reply button: what the user sees, and what gets sent when they tap it.
+
+  These were plain strings until the catalogue was englishified. The label and the value are the
+  same thing for most buttons, but they must be allowed to differ for one specific reason: a
+  button's text *is* the message sent back to the planner, which writes it verbatim into a slot
+  and passes it on to the commerce service as an attribute filter. The catalogue stores
+  「use_case": "办公"」, so a button reading "Office" that sends "Office" matches nothing — and an
+  empty result set looks exactly like "there really is no matching product". Splitting the two
+  lets the button read "Office" while still sending 办公.
+
+  Where label and value genuinely are the same (「Under 300」, 「No thanks」), a bare string still
+  works everywhere — in YAML, in action arguments, and in state persisted before this type
+  existed. `coerce` is what makes that true; do not bypass it.
+  """
+  label: str
+  value: str
+
+  @classmethod
+  def coerce(cls, raw: Any) -> "Suggestion":
+    """
+    Goal: accept a bare string, a {label, value} mapping, or an existing Suggestion
+
+    A bare string is the common case and means label == value. A mapping missing either key falls
+    back to the other, so a half-written config degrades to a working button rather than an
+    empty one.
+    """
+    if isinstance(raw, Suggestion):
+      return raw
+    if isinstance(raw, dict):
+      label = str(raw.get("label") or raw.get("value") or "")
+      value = str(raw.get("value") or raw.get("label") or "")
+      return cls(label=label, value=value)
+    text = str(raw)
+    return cls(label=text, value=text)
+
+  def to_dict(self) -> dict[str, Any]:
+    return {"label": self.label, "value": self.value}
+
+  @classmethod
+  def from_dict(cls, data: Any) -> "Suggestion":
+    return cls.coerce(data)
+
+
+@dataclass(slots=True)
 class BotMessage:
   """
   One bot reply. The protocol is appendix E of meta-business-agent.md.
@@ -104,14 +150,14 @@ class BotMessage:
   text: str  # the bot's reply text; always present
   object: FocusedObject | None = None  # legacy single business object; equivalent to a one-item cards list
   cards: list[FocusedObject] = field(default_factory=list)  # current path: a list of business objects
-  suggestions: list[str] = field(default_factory=list)      # quick-reply button labels
+  suggestions: list[Suggestion] = field(default_factory=list)  # quick-reply buttons
 
   def to_dict(self) -> dict[str, Any]:
       return {
           "text": self.text,
           "object": FocusedObject.to_dict(self.object) if self.object is not None else None,
           "cards": [FocusedObject.to_dict(card) for card in self.cards],
-          "suggestions": list(self.suggestions),
+          "suggestions": [suggestion.to_dict() for suggestion in self.suggestions],
       }
 
   @classmethod
@@ -123,7 +169,9 @@ class BotMessage:
           # State persisted before these keys existed does not have them, so .get() guards the
           # read — otherwise loading an old session raises KeyError
           cards=[FocusedObject.from_dict(card) for card in (data.get('cards') or [])],
-          suggestions=list(data.get('suggestions') or []),
+          # Persisted state written before Suggestion existed holds bare strings; coerce
+          # rather than failing, or every session from before this change becomes unreadable
+          suggestions=[Suggestion.coerce(item) for item in (data.get('suggestions') or [])],
       )
 
 

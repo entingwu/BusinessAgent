@@ -2,6 +2,8 @@
 Define step
 """
 from dataclasses import dataclass, field
+
+from business_agent.domain.messages import Suggestion
 from enum import Enum
 from typing import Any
 
@@ -21,7 +23,7 @@ class ResponseDefinition:
   # Quick-reply button labels (appendix E). A collect step carrying them lets the user fill the
   # slot with one tap instead of typing — this is how spec 3.3.3's "quick replies advance the
   # step" two-round convergence is implemented.
-  suggestions: list[str] = field(default_factory=list)
+  suggestions: list[Suggestion] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -111,7 +113,8 @@ class CollectionFlowStep(FlowStep):
         text=step_dict['response']['text'],
         mode=step_dict['response'].get('mode', 'static'),
         prompt=step_dict['response'].get('prompt'),
-        suggestions=list(step_dict['response'].get('suggestions') or []),
+        suggestions=[Suggestion.coerce(item)
+                     for item in (step_dict['response'].get('suggestions') or [])],
       ),
       validated=Validated(
         condition=step_dict['validated']['condition'],
@@ -119,7 +122,8 @@ class CollectionFlowStep(FlowStep):
           text=step_dict['validated']['failure_response']['text'],
           mode=step_dict['validated']['failure_response'].get('mode', 'static'),
           prompt=step_dict['validated']['failure_response'].get('prompt'),
-          suggestions=list(step_dict['validated']['failure_response'].get('suggestions') or []),
+          suggestions=[Suggestion.coerce(item) for item
+                       in (step_dict['validated']['failure_response'].get('suggestions') or [])],
         ) if step_dict['validated'].get('failure_response') is not None else None,
       ) if step_dict.get('validated') is not None else None,
     )

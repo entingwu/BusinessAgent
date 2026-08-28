@@ -244,8 +244,26 @@ function normalizeCards(message) {
   return message.object ? [message.object] : []
 }
 
+/* 快捷回复归一化。协议形态是 { label, value }：label 显示，value 是点击后
+   发出去的内容。两者允许不同，因为按钮文案同时是回传给规划器的用户输入——
+   写着 "Office" 的按钮必须发出 办公，那才是商品目录里存的属性值。
+
+   同时兼容裸字符串：本次改动之前落库的历史消息里 suggestions 是 string[]，
+   老会话读回来不该变成一排空按钮。缺 label 或缺 value 时互相回退，
+   配置写了一半也退化成一个能用的按钮而不是空白。 */
 function normalizeSuggestions(message) {
-  return Array.isArray(message.suggestions) ? message.suggestions : []
+  if (!Array.isArray(message.suggestions)) return []
+  return message.suggestions
+    .map((item) => {
+      if (item && typeof item === 'object') {
+        const label = item.label ?? item.value ?? ''
+        const value = item.value ?? item.label ?? ''
+        return { label: String(label), value: String(value) }
+      }
+      const text = String(item ?? '')
+      return { label: text, value: text }
+    })
+    .filter((item) => item.label !== '')
 }
 
 function insertCurrentPageDividerIfNeeded() {
@@ -856,13 +874,13 @@ async function copyText(text, key) {
                   <!-- 快捷回复 -->
                   <div v-if="message.suggestions.length > 0" class="suggestion-chips">
                     <button
-                      v-for="sug in message.suggestions"
-                      :key="sug"
+                      v-for="(sug, sugIndex) in message.suggestions"
+                      :key="`${sug.value}-${sugIndex}`"
                       type="button"
                       class="pill-button"
                       :disabled="isComposerLocked"
-                      @click.stop="sendSuggestion(sug)"
-                    >{{ sug }}</button>
+                      @click.stop="sendSuggestion(sug.value)"
+                    >{{ sug.label }}</button>
                   </div>
                 </div>
               </div>

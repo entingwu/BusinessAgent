@@ -203,19 +203,25 @@ flows:
       # 三个收集步骤都挂了快捷回复：用户点一下就把值填回来，
       # 不必自己敲。这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式。
       #
-      # **use_case 与 style 这两组按钮文案刻意保留中文**，与本次英语化不同步。
-      # 快捷回复的文案就是回传给规划器的用户输入，规划器把它原样填进槽位，
-      # 槽位值再直接送去中台做属性过滤——所以这些不是文案，是匹配键。
-      # 中台 24 件商品存的就是 "use_case": "办公"、"style": "极简"。
-      # 只翻按钮不改中台，点击后检索必然返回空列表，而空列表与「确实没有匹配
+      # use_case 与 style 两组按钮写成 {label, value}：label 是用户看到的英文，
+      # value 是点击后回传给规划器的中文。两者必须能分开，因为按钮文案就是回传的
+      # 用户输入——规划器把它原样填进槽位，槽位值再直接送去中台做属性过滤，
+      # 而中台 24 件商品存的是 "use_case": "办公"、"style": "极简"。
+      # 显示英文就意味着回传英文，检索必然返回空列表，而空列表与「确实没有匹配
       # 商品」在界面上无法区分，失败是静默的。
-      # 预算那组可以翻，因为 _parse_budget 只取数字部分，不做字符串匹配。
+      #
+      # 预算那组仍是裸字符串：_parse_budget 只抽数字、不做字符串匹配，label 与
+      # value 本来就该相同。裸字符串会被 Suggestion.coerce 当成 label == value。
       - id: ask_use_case
         type: collect
         slot_name: product_use_case
         response:
           text: "Happy to help you pick. What will you mainly use it for?"
-          suggestions: [ "办公", "游戏", "差旅", "居家" ]
+          suggestions:
+            - { label: "Office", value: "办公" }
+            - { label: "Gaming", value: "游戏" }
+            - { label: "Travel", value: "差旅" }
+            - { label: "Home", value: "居家" }
         next: ask_budget
 
       - id: ask_budget
@@ -231,7 +237,11 @@ flows:
         slot_name: product_style
         response:
           text: "Any style you prefer?"
-          suggestions: [ "极简", "商务", "电竞", "北欧" ]
+          suggestions:
+            - { label: "Minimalist", value: "极简" }
+            - { label: "Business", value: "商务" }
+            - { label: "Esports", value: "电竞" }
+            - { label: "Nordic", value: "北欧" }
         next: recommend
 
       - id: recommend

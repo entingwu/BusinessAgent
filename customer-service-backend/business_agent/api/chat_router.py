@@ -7,7 +7,8 @@ from fastapi import APIRouter
 
 from business_agent.api.dependencies import DialogueStateServiceDep
 from business_agent.api.schemas import (ChatHistoryResponse, ChatRequest, ChatResponse, ChatBotMessage,
-                                        ChatObject, HandoffRequest, SessionStateResponse)
+                                        ChatObject, ChatSuggestion, HandoffRequest,
+                                        SessionStateResponse)
 from business_agent.domain.messages import UserMessage, ProcessedResult, MessageType, FocusedObject
 
 router = APIRouter()
@@ -73,7 +74,8 @@ def _build_chat_response(process_result: ProcessedResult) -> ChatResponse:
                 text=bot_message.text,
                 object=_to_chat_object(bot_message.object) if bot_message.object is not None else None,
                 cards=[_to_chat_object(card) for card in bot_message.cards],
-                suggestions=list(bot_message.suggestions),
+                suggestions=[ChatSuggestion(label=suggestion.label, value=suggestion.value)
+                             for suggestion in bot_message.suggestions],
             )
             for bot_message in process_result.messages
         ]

@@ -20,6 +20,18 @@ class ChatObject(BaseModel):
 ControlOwner = Literal["AGENT", "PENDING_HUMAN", "HUMAN"]
 
 
+class ChatSuggestion(BaseModel):
+  """
+  One quick-reply button. `label` is what the user sees; `value` is what is sent back when they
+  tap it.
+
+  The two differ where a button's text doubles as a matching key — a button reading "Office" has
+  to send 办公, because that is what the commerce catalogue stores and what the attribute filter
+  compares against. See Suggestion in domain/messages.py for the full reasoning.
+  """
+  label: str
+  value: str
+
 class ChatBotMessage(BaseModel):
   """
   One bot reply. text, cards and suggestions may all carry values at once.
@@ -29,7 +41,7 @@ class ChatBotMessage(BaseModel):
   text: str
   object: ChatObject | None = None
   cards: list[ChatObject] = Field(default_factory=list)
-  suggestions: list[str] = Field(default_factory=list)
+  suggestions: list[ChatSuggestion] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):

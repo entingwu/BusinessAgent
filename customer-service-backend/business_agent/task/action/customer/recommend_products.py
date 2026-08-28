@@ -10,7 +10,7 @@ import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from business_agent.domain.messages import BotMessage, FocusedObject
+from business_agent.domain.messages import BotMessage, FocusedObject, Suggestion
 from business_agent.domain.state import DialogueState
 from business_agent.task.action.base import Action, ActionResult, SlotSpec
 from business_agent.task.action.customer.shared import search_products
@@ -166,7 +166,8 @@ class ActionRecommendProducts(Action):
         messages=[BotMessage(
           text="The product service is not responding right now, so I cannot look this up. "
                "You can ask me again shortly, or I can hand you to a human agent.",
-          suggestions=["Try again later", "Talk to a human"],
+          suggestions=[Suggestion(label="Try again later", value="Try again later"),
+                       Suggestion(label="Talk to a human", value="Talk to a human")],
         )],
         updated_slots={"product_round": self._next_round(slots)},
       )
@@ -202,7 +203,7 @@ class ActionRecommendProducts(Action):
     except (TypeError, ValueError):
       return "1"
 
-  def _refine_suggestions(self, slots: dict[str, Any]) -> list[str]:
+  def _refine_suggestions(self, slots: dict[str, Any]) -> list[Suggestion]:
     """
     Goal: offer refinement options that genuinely change the next search
 
@@ -210,14 +211,16 @@ class ActionRecommendProducts(Action):
     changes nothing, which is exactly why these buttons were previously judged dead.
     """
     current_style = str(slots.get("product_style") or "")
-    suggestions = [style for style in STYLE_VALUES if style != current_style][:2]
+    # label is the English name, value is what the planner must receive — see ATTRIBUTE_VALUE_LABELS
+    suggestions = [Suggestion(label=ATTRIBUTE_VALUE_LABELS.get(style, style).capitalize(), value=style)
+                   for style in STYLE_VALUES if style != current_style][:2]
 
     current_budget = str(slots.get("product_budget") or "")
     tighter = next((budget for budget in BUDGET_VALUES if budget != current_budget), None)
     if tighter:
-      suggestions.append(tighter)
+      suggestions.append(Suggestion(label=tighter, value=tighter))
 
-    suggestions.append("No thanks")
+    suggestions.append(Suggestion(label="No thanks", value="No thanks"))
     return suggestions
 
   def _to_card(self, item: dict[str, Any]) -> FocusedObject:
