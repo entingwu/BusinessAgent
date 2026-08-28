@@ -296,7 +296,7 @@ def _get_product_or_404(db: Session, product_id: str) -> Product:
 @router.get(
     "/health",
     response_model=ApiResponse,
-    tags=["系统"],
+    tags=["System"],
     summary="Health check",
     description="Checks that the service and its database connection are healthy.",
 )
@@ -308,7 +308,7 @@ def health(db: Session = Depends(get_db)):
 @router.get(
     "/users/{user_id}/orders",
     response_model=ApiResponse,
-    tags=["用户"],
+    tags=["Users"],
     summary="List a user's recent orders",
     description="Recent orders for a user id, used to render the order object list in the UI.",
 )
@@ -320,7 +320,7 @@ def user_orders(user_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/users/{user_id}/products",
     response_model=ApiResponse,
-    tags=["用户"],
+    tags=["Users"],
     summary="List a user's recent products",
     description="Products a user recently bought or interacted with, used to render the product object list in the UI.",
 )
@@ -332,7 +332,7 @@ def user_products(user_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/orders/{order_id}",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Get order detail",
     description="Order header, delivery details and line items for an order id.",
 )
@@ -364,7 +364,7 @@ def order_detail(order_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/orders/{order_id}/status",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Get order status",
     description="The order's current status plus the customer-facing description of it.",
 )
@@ -382,7 +382,7 @@ def order_status(order_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/orders/{order_id}/logistics",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Get shipment tracking",
     description="Carrier, tracking number, current shipping status and the tracking events.",
 )
@@ -417,16 +417,18 @@ def order_logistics(order_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/products",
     response_model=ApiResponse,
-    tags=["商品"],
+    tags=["Products"],
     summary="Search products",
     description=(
-        "按关键词、价格区间、商品属性和库存状态检索商品，返回分页后的候选商品列表与匹配总数，"
-        "供上层按用户偏好做商品推荐。所有查询参数均可选；没有匹配商品时返回空列表且 total 为 0，不返回 404。\n\n"
-        "attr 为可重复传入的属性过滤条件，格式 “属性名:属性值”（如 attr=use_case:办公&attr=style:极简）。"
-        "可用的属性名为 use_case（用途）、style（风格）、spec（规格）、size（尺码）、color（颜色）、"
-        "brand（品牌）、warranty（保修），传其他属性名返回 400 而不是空列表。"
-        "属性值为忽略大小写的模糊匹配，多个条件之间是「与」的关系。\n\n"
-        "库存状态每次实时读库，响应显式声明 Cache-Control: no-store，不做任何缓存。"
+        "Search products by keyword, price range, attributes and stock status. Returns a paged "
+        "list of candidates plus the total match count, for callers building recommendations. "
+        "Every query parameter is optional; no match returns an empty list with total 0, not a 404.\n\n"
+        "attr is a repeatable attribute filter in the form \u201cname:value\u201d, "
+        "e.g. attr=use_case:office&attr=style:minimalist. Valid names are use_case, style, spec, "
+        "size, color, brand and warranty; any other name returns 400 rather than an empty list. "
+        "Values match case-insensitively as substrings, and several filters are ANDed together.\n\n"
+        "Stock status is read live on every request and the response sets Cache-Control: no-store; "
+        "nothing here is cached."
     ),
 )
 def search_products(
@@ -533,7 +535,7 @@ def search_products(
 @router.get(
     "/products/{product_id}",
     response_model=ApiResponse,
-    tags=["商品"],
+    tags=["Products"],
     summary="Get product detail",
     description="Title, description, price, stock status and specifications for a product id.",
 )
@@ -556,15 +558,16 @@ def product_detail(product_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/orders",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Create an order",
     description=(
-        "创建一笔订单并扣减库存。订单创建后状态为「待支付」——支付不在本服务范围内，"
-        "支付状态由业务中台后续回写。\n\n"
-        "**幂等**：请求体必须带 idempotency_key。同一个 key 重复提交只会产生一笔订单，"
-        "重复请求原样返回首次的结果，并把 data.idempotent_replay 置为 true，"
-        "调用方据此区分「下单成功」与「重复提交」。\n\n"
-        "库存不足、商品不存在、用户不存在都返回 4xx 且不产生订单，不会出现扣了库存却没建单的中间态。"
+        "Create an order and decrement stock. A new order starts as Awaiting payment \u2014 payment "
+        "is outside this service, and its status is written back later by the business platform.\n\n"
+        "**Idempotent**: the body must carry an idempotency_key. Repeating the same key produces one "
+        "order only; the repeat returns the first result unchanged with data.idempotent_replay set "
+        "to true, so callers can tell a new order from a duplicate submission.\n\n"
+        "Insufficient stock, a missing product and a missing user all return 4xx and create no "
+        "order \u2014 there is no in-between state where stock was taken but no order exists."
     ),
 )
 def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
@@ -586,8 +589,9 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
                 # 不回显既有订单号：指纹不匹配意味着这个 key 可能属于另一个用户，
                 # 把订单号写进错误信息等于把别人的订单号交出去
                 detail=(
-                    f"幂等键 {body.idempotency_key} 已被一笔内容不同的订单占用。"
-                    "下单人、商品或收货信息有任何变化都请换一个幂等键。"
+                    f"Idempotency key {body.idempotency_key} is already held by an order with "
+                    "different contents. Use a new key whenever the buyer, the items or the "
+                    "delivery details change."
                 ),
             )
         return _wrap(_build_create_order_result(existing, replay=True))
@@ -692,8 +696,9 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"幂等键 {body.idempotency_key} 已被一笔内容不同的订单占用。"
-                    "下单人、商品或收货信息有任何变化都请换一个幂等键。"
+                    f"Idempotency key {body.idempotency_key} is already held by an order with "
+                    "different contents. Use a new key whenever the buyer, the items or the "
+                    "delivery details change."
                 ),
             )
         return _wrap(_build_create_order_result(winner, replay=True))
@@ -706,7 +711,7 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
 @router.post(
     "/orders/{order_id}/shipping-reminders",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Create a shipping reminder",
     description="Create a shipping reminder for an order. Only orders awaiting shipment or awaiting pickup may be reminded.",
 )
@@ -729,7 +734,7 @@ def create_shipping_reminder(
         operator=body.submitted_by,
         reason=body.note,
         status="submitted",
-        status_desc="发货提醒已创建，商家会尽快处理。",
+        status_desc="Shipping reminder created; the merchant will handle it shortly.",
         created_at=datetime.now(),
     )
     db.add(urge)
@@ -749,7 +754,7 @@ def create_shipping_reminder(
 @router.post(
     "/orders/{order_id}/refund-applications",
     response_model=ApiResponse,
-    tags=["订单"],
+    tags=["Orders"],
     summary="Create a refund request",
     description="Create a refund request for an order. Returns a conflict if one is already in progress.",
 )
@@ -779,7 +784,7 @@ def create_refund_application(
         operator=body.submitted_by,
         reason=body.reason,
         status="submitted",
-        status_desc="退款申请已提交，正在审核中。",
+        status_desc="Refund request submitted and under review.",
         created_at=datetime.now(),
     )
     db.add(refund)

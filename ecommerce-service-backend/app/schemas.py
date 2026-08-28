@@ -111,7 +111,7 @@ class ProductSearchData(BaseModel):
 
 class UrgeShippingRequest(BaseModel):
     submitted_by: str = Field(default="system")
-    note: str = Field(default="用户希望尽快发货")
+    note: str = Field(default="Customer would like the order shipped sooner")
 
 
 class RefundRequestBody(BaseModel):
@@ -134,8 +134,10 @@ class CreateOrderItemRequest(BaseModel):
 
 class CreateOrderRequest(BaseModel):
     """
-    创建订单的请求体。对应规范 3.3.5：收集 SKU、数量、地址、配送方式 → 确认 → 创建订单。
-    支付不在范围内，订单创建后置为「待支付」，支付状态由业务中台回写。
+    Request body for creating an order. Spec 3.3.5: collect SKU, quantity, address and
+    delivery method, confirm, then create.
+    Payment is out of scope here: a new order is created as Awaiting payment, and its payment
+    status is written back later by the business platform.
     """
     user_id: str
     items: list[CreateOrderItemRequest] = Field(min_length=1, max_length=20)

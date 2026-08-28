@@ -28,20 +28,20 @@ async def lifespan(_: FastAPI):
 
 openapi_tags = [
     {
-        "name": "系统",
-        "description": "服务可用性与基础检查接口。",
+        "name": "System",
+        "description": "Service availability and basic health checks.",
     },
     {
-        "name": "用户",
-        "description": "查询用户相关的订单列表和商品列表。",
+        "name": "Users",
+        "description": "A user's order list and product list.",
     },
     {
-        "name": "订单",
-        "description": "订单详情、订单状态、物流信息，以及订单相关操作请求。",
+        "name": "Orders",
+        "description": "Order detail, order status, shipment tracking, and order-related operations.",
     },
     {
-        "name": "商品",
-        "description": "商品检索与商品详情查询接口。",
+        "name": "Products",
+        "description": "Product search and product detail.",
     },
 ]
 
