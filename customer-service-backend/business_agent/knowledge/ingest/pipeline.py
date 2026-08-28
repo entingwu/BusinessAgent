@@ -92,7 +92,12 @@ class IngestPipeline:
       # rather than documenting "remember to run --force after merging".
       previous_path = await repository.get_source_file_path(source.source_id)
       stale_path_format = bool(previous_path) and Path(previous_path).is_absolute()
-      if not force and previous_hash == source.content_hash and not stale_path_format:
+      # The metadata says this source is indexed — but the metadata lives in a shared database
+      # while the vector index is a local gitignored directory. On a fresh clone the hashes match
+      # and the index is empty, so a plain skip reports success and leaves nothing to retrieve.
+      # Ask the index itself rather than trusting the hash.
+      indexed_chunks = await self._vector_client.count(source.source_id)
+      if not force and previous_hash == source.content_hash and not stale_path_format and indexed_chunks > 0:
         report.results.append(SourceResult(
           source_id=source.source_id,
           source_type=source.source_type,

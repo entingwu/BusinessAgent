@@ -199,15 +199,21 @@ class ChromaVectorClient:
 
     return await self._call(_run)
 
-  async def count(self) -> int:
+  async def count(self, source_id: str | None = None) -> int:
     """
-    Goal: the total number of chunks in the index
-    Returns: int
-    Raises: VectorStoreUnavailableError
-    """
+    Goal: how many chunks the index holds — the whole collection, or one source.
 
-    def _run() -> int:
-      return self._get_collection().count()
+    The per-source form exists so ingest can tell "this source is already indexed" from
+    "the metadata says it is, but the local index does not have it". Those are the same
+    content_hash and completely different situations.
+    Args: source_id: count only this source's chunks; None counts everything
+    Returns: int
+    """
+    collection = await self._call(self._get_collection)
+    if source_id is None:
+      return await self._call(collection.count)
+    raw = await self._call(lambda: collection.get(where={"source_id": source_id}, include=[]))
+    return len(raw.get("ids") or [])
 
     return await self._call(_run)
 

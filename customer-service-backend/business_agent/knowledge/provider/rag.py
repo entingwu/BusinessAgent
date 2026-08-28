@@ -75,6 +75,18 @@ class KnowledgeRetriever:
       return await self._retrieve_via_graph(
         query_text, filters, effective_top_k, effective_threshold, provider_id)
 
+    # An empty index is not a miss. Returning [] here makes the responder tell the user
+    # "I could not find that in the merchant's knowledge base" — which is false: the knowledge
+    # base has content, it simply was not indexed in this checkout. Saying something untrue is
+    # worse than saying "I cannot check right now", so this takes the unavailable path instead.
+    try:
+      if await self._vector_client.count() == 0:
+        raise VectorStoreUnavailableError(
+          "vector index is empty — run `python -m business_agent.knowledge.ingest ingest --force`")
+    except VectorStoreUnavailableError as error:
+      logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
+      raise KnowledgeUnavailableError(str(error)) from error
+
     try:
       embedded = await get_embedding_backend().embed_query(query_text)
       # sparse 只有 bge_m3 后端产出；给了就走混合检索，没给就退化为纯 dense。

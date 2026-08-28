@@ -112,6 +112,12 @@ class KnowledgeQueryGraph:
   async def node_search_direct(self, state: QueryGraphState) -> QueryGraphState:
     """第一路：用原问题检索。"""
     try:
+      # Same reasoning as the function path: an empty index is an outage, not a miss.
+      # "Not in our knowledge base" would be a false statement about a knowledge base that has
+      # content — it just is not indexed here.
+      if await get_vector_client().count() == 0:
+        raise VectorStoreUnavailableError(
+          "vector index is empty — run `python -m business_agent.knowledge.ingest ingest --force`")
       return {"matches_direct": await self._search(state["question"], state.get("source_types"))}
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
       # 这一路挂了就是整条链路不可用——没有任何依据可以作答。

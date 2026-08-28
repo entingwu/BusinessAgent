@@ -211,12 +211,23 @@ class MilvusVectorClient:
     await self._call(lambda: client.delete(collection_name=self._collection, filter=expr))
     return len(existing)
 
-  async def count(self) -> int:
+  async def count(self, source_id: str | None = None) -> int:
     """
-    Goal: 当前索引里的分片总数。与元数据表的条数对不上就是索引没建好。
+    Goal: how many chunks the index holds — the whole collection, or one source.
+
+    The per-source form exists so ingest can tell "this source is already indexed" from
+    "the metadata says it is, but the local index does not have it". Those are the same
+    content_hash and completely different situations.
+    Args: source_id: count only this source's chunks; None counts everything
     Returns: int
     """
     client = self._get_client()
+    if source_id is not None:
+      rows = await self._call(lambda: client.query(
+        collection_name=self._collection,
+        filter=f'source_id == "{escape_milvus_string(source_id)}"',
+        output_fields=["chunk_id"]))
+      return len(rows or [])
     # 用 count(*) 查询而不是 get_collection_stats：后者只反映已 flush 的段，
     # 刚写入未 flush 时会报 0，让人误以为入库失败。
     rows = await self._call(lambda: client.query(
