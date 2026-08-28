@@ -1,16 +1,20 @@
 """
-知识回复生成
+Knowledge answer generation.
 
-规范 B.6 第 3 条点名要改掉的旧行为：把所有 provider 的分片无差别 "\n\n".join 塞进提示词。
-现在的规则：
+Spec B.6 item 3 names the old behaviour this replaces: "\n\n".join every provider's chunks
+indiscriminately into the prompt. The rules now:
 
-1. 命中多个分片按相似度排序取 Top-K（settings.knowledge_top_k）
-2. 上下文分片总长 ≤ settings.knowledge_context_max_tokens，超出按相似度从低到高截断
-3. 回复必须基于命中分片组织，不得超出分片信息作答
-4. 未命中或全部低于阈值 → 固定兜底话术，**不调用 LLM**，从机制上杜绝编造
-5. 检索链路不可用 → 降级话术「暂时查不了，帮你转人工」，不得退化为模型自身知识作答
-6. 内部记录命中的分片 ID 与相似度，让回复可溯源：既打日志，也写 retrieval_traces 表
-   （日志会滚掉、也没法按 turn_id 查回来，两者都要，见 knowledge/trace.py）
+1. Multiple hits are sorted by similarity and cut to Top-K (settings.knowledge_top_k).
+2. Total context length stays within settings.knowledge_context_max_tokens; anything over budget
+   is dropped lowest-similarity first.
+3. The answer must be built from the retrieved chunks and may not go beyond what they say.
+4. A miss, or everything below threshold, returns fixed fallback text and **never calls the
+   LLM** — fabrication is ruled out mechanically rather than by instruction.
+5. When the retrieval stack is unavailable, degraded text ("cannot look this up, let me hand you
+   to a human") is returned; it must never fall back to the model's own knowledge.
+6. Hit chunk ids and similarities are recorded internally so answers stay traceable: both to the
+   log and to the retrieval_traces table. (Logs roll over and cannot be queried by turn_id, so
+   both are needed — see knowledge/trace.py.)
 """
 import logging
 
@@ -36,12 +40,13 @@ from business_agent.domain.messages import BotMessage
 
 logger = logging.getLogger(__name__)
 
-# 未命中兜底：说明需要什么信息 + 引导转人工，不做任何事实性陈述。
+# Miss fallback: say what is needed and offer a human, without stating any fact.
 #
-# 「talk to a human」这句不是随便挑的措辞——它必须是 handoff/control.py 的
-# HUMAN_REQUEST_PATTERNS_EN 里真实存在的短语。这里教用户说一句话，而那句话
-# 能不能生效由另一个文件决定：两处不同步，就等于教用户说一句不管用的咒语，
-# 而且失败是静默的（用户照做了，什么也没发生）。改任一处都要对照另一处。
+# "talk to a human" is not casual wording — it must be a phrase that actually exists in
+# HUMAN_REQUEST_PATTERNS_EN in handoff/control.py. This text teaches the user a sentence whose
+# effect is decided in another file: if the two drift apart, we are teaching them an incantation
+# that does nothing, and the failure is silent (the user says it, and nothing happens).
+# Changing either side means checking the other.
 FALLBACK_NO_HIT_TEXT = (
     "I could not find anything in the merchant's knowledge base that covers this, "
     "and I will not answer from impression. "
@@ -50,7 +55,7 @@ FALLBACK_NO_HIT_TEXT = (
     "You can also just say \"talk to a human\" and I will hand you over to a human agent."
 )
 
-# 降级兜底：向量库或 Embedding 服务不可用（规范 5.1 / C.4.7）
+# Degraded fallback: the vector store or the embedding service is unavailable (spec 5.1 / C.4.7)
 FALLBACK_UNAVAILABLE_TEXT = (
     "I cannot reach the knowledge base right now, and I would rather not guess than give you "
     "something inaccurate. I can hand you over to a human agent, or you can ask me again shortly."
@@ -67,22 +72,26 @@ class KnowledgeResponder:
                       state: DialogueState,
                       provider_ids: list[str] | None = None) -> list[BotMessage]:
         """
-        Goal: 基于命中分片组织回复；未命中走兜底。两条路径都落溯源记录。
+        Goal: build the answer from the retrieved chunks; a miss takes the fallback. Both paths
+              write a trace record.
         Args:
-            chunks: 各 Provider 检索到的分片
-            state: 对话状态
-            provider_ids: 本轮参与检索的 Provider ID，未命中时按它落「哪个源没查到」
+            chunks: the chunks each provider retrieved
+            state: the dialogue state
+            provider_ids: the providers queried this turn; on a miss they record which source
+                came up empty
         Returns: list[BotMessage]
         """
-        # 1. 排序 + Top-K + 上下文长度截断
+        # 1. Sort, cut to Top-K, trim to the context budget
         selected, dropped = self._select_chunks(chunks)
 
-        # 2. 未命中：固定兜底话术，不调用 LLM，杜绝编造（规范 5.2 / 验收标准 3）
-        #    落一行 outcome=no_hit 的溯源记录，事后能回答「这一轮为什么兜底了」
+        # 2. Miss: fixed fallback text, no LLM call, fabrication ruled out (spec 5.2 /
+        #    acceptance criterion 3). Write one outcome=no_hit trace row so "why did this turn
+        #    fall back?" can be answered afterwards.
         if not selected:
             logger.info("knowledge_respond fallback=no_hit candidates=%s", len(chunks))
-            # 连续未命中是「Agent 答不了」的信号，累计到阈值触发转人工（规范 3.3.4）。
-            # 这里是唯一知道本轮命中与否的地方，所以计数在此更新
+            # Consecutive misses signal "the Agent cannot answer this"; at the threshold they
+            # trigger a handoff (spec 3.3.4). This is the only place that knows whether this turn
+            # hit, so the counter is updated here.
             state.note_knowledge_miss(missed=True)
             await self._trace_recorder.record(
                 state,
@@ -92,10 +101,11 @@ class KnowledgeResponder:
             )
             return [BotMessage(text=FALLBACK_NO_HIT_TEXT)]
 
-        # 命中，连续未命中计数清零
+        # A hit — reset the consecutive-miss counter
         state.note_knowledge_miss(missed=False)
 
-        # 3. 内部记录命中的分片 ID 与相似度，回复可溯源：日志 + retrieval_traces 表
+        # 3. Record hit chunk ids and similarities so the answer stays traceable: log +
+        #    retrieval_traces table
         logger.info(
             "knowledge_respond hits=%s dropped=%s traces=%s",
             len(selected), len(dropped), [chunk.trace() for chunk in selected],
@@ -108,16 +118,16 @@ class KnowledgeResponder:
             dropped=dropped,
         )
 
-        # 4. 加载提示词模版内容
+        # 4. Load the prompt template
         prompt_template_str = load_prompt_template("knowledge_respond")
 
-        # 5. 实例化提示词模版对象
+        # 5. Instantiate the template object
         prompt_template = PromptTemplate.from_template(template=prompt_template_str, template_format="jinja2")
 
-        # 6. 定义chain
+        # 6. Define the chain
         chain = prompt_template | llm_client | StrOutputParser()
 
-        # 7. 调用
+        # 7. Invoke
         result = await chain.ainvoke({
             "user_message": ChatHistoryBuilder.build_user_message_str(state.pending_turn.user_message),
             "history": ChatHistoryBuilder.build(state.current_session().turns[-10:]),
@@ -132,17 +142,20 @@ class KnowledgeResponder:
                                   provider_ids: list[str] | None = None,
                                   error: str | None = None) -> list[BotMessage]:
         """
-        Goal: 检索链路不可用时的降级回复。不调用 LLM，不使用模型自身知识作答。
-              同样落一行 outcome=unavailable 的溯源记录——事后要能区分
-              「知识库里没有」和「知识库根本没查成」。
+        Goal: the degraded reply for when the retrieval stack is unavailable. No LLM call, and
+              never an answer from the model's own knowledge.
+              It writes an outcome=unavailable trace row too — afterwards it must be possible to
+              tell "the knowledge base does not contain this" from "the knowledge base could not
+              be queried at all".
         Args:
-            state: 对话状态
-            provider_ids: 本轮参与检索的 Provider ID
-            error: 失败原因摘要
+            state: the dialogue state
+            provider_ids: the providers queried this turn
+            error: a summary of what failed
         Returns: list[BotMessage]
         """
         logger.warning("knowledge_respond fallback=unavailable sender_id=%s error=%s", state.sender_id, error)
-        # 降级与未命中对用户是同一件事——问了但没得到答案，同样计入转人工阈值
+        # To the user, degraded and miss are the same thing — they asked and got no answer — so
+        # it counts towards the handoff threshold too
         state.note_knowledge_miss(missed=True)
         await self._trace_recorder.record(
             state,
@@ -156,14 +169,16 @@ class KnowledgeResponder:
                        chunks: list[KnowledgeChunk]
                        ) -> tuple[list[KnowledgeChunk], list[tuple[KnowledgeChunk, str]]]:
         """
-        Goal: 排序 → Top-K → 上下文总长截断
-              业务接口分片（score 为 None）是权威实时数据，始终保留，不参与 Top-K 竞争；
-              向量检索分片按相似度从高到低取 Top-K，超出总长预算时从低到高丢弃。
+        Goal: sort -> Top-K -> trim to the total context budget.
+              Chunks from business APIs (score is None) are authoritative live data: they are
+              always kept and never compete for a Top-K slot. Vector hits are taken highest
+              similarity first, and dropped lowest first when the budget runs out.
         Args:
-            chunks: 候选分片
-        Returns: (进了提示词的分片, [(被丢掉的分片, 丢弃原因)])
-                 被丢掉的也返回出去，一起落进 retrieval_traces——
-                 事后调阈值时「差一点就进上下文的是哪几片」是关键信息。
+            chunks: the candidate chunks
+        Returns: (chunks that made it into the prompt, [(dropped chunk, reason)])
+                 The dropped ones are returned too and written to retrieval_traces — when
+                 tuning the threshold later, "which chunks just barely missed the context" is
+                 exactly the information you need.
         """
         authoritative: list[KnowledgeChunk] = []
         retrieved: list[KnowledgeChunk] = []
@@ -172,7 +187,7 @@ class KnowledgeResponder:
         for chunk in chunks:
             if not chunk or not (chunk.content or "").strip():
                 continue
-            # 多个 Provider 可能召回同一分片，按 chunk_id 去重
+            # Several providers can return the same chunk — de-duplicate by chunk_id
             if chunk.chunk_id is not None:
                 if chunk.chunk_id in seen_ids:
                     continue
@@ -200,7 +215,8 @@ class KnowledgeResponder:
         for chunk in retrieved:
             cost = estimate_tokens(chunk.content)
             if truncated or budget - cost < 0:
-                # 预算耗尽，剩下的都是相似度更低的，直接截断（规范 3.1.2 默认参数）
+                # Budget exhausted; everything left scores lower, so cut here (spec 3.1.2
+                # default parameters)
                 if not truncated:
                     logger.info("knowledge_respond truncated_from_chunk=%s score=%s", chunk.chunk_id, chunk.score)
                 truncated = True
@@ -213,10 +229,11 @@ class KnowledgeResponder:
 
     def _build_knowledge_content(self, chunks: list[KnowledgeChunk]) -> str:
         """
-        Goal: 把分片拼成带编号与来源标注的上下文。来源标注同时进提示词，
-              便于模型自查「这句话出自哪一片」，也便于人工回读日志对照。
+        Goal: assemble the chunks into a numbered, source-labelled context. The source labels go
+              into the prompt as well, so the model can check which chunk a sentence came from
+              and so a human reading the log can cross-reference it.
         Args:
-            chunks: 已选中的分片
+            chunks: the selected chunks
         Returns: str
         """
         blocks = []

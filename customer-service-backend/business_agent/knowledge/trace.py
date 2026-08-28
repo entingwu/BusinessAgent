@@ -1,18 +1,22 @@
 """
-检索溯源落库
+Persisting retrieval traces.
 
-规范 3.1.2 要求「内部记录命中的分片 ID 与相似度」，5.2 要求「基于文档知识的回复可溯源到
-具体分片」。日志能满足前者，但日志会滚掉、也没法按 turn_id 查回来，所以命中结果同时写进
-retrieval_traces 表（表结构与理由见 repository/knowledge_repository.py）。
+Spec 3.1.2 requires "recording hit chunk ids and similarities internally", and 5.2 requires that
+"answers grounded in document knowledge trace back to specific chunks". Logs satisfy the first,
+but logs roll over and cannot be queried by turn_id, so hits are also written to the
+retrieval_traces table (schema and rationale in repository/knowledge_repository.py).
 
-三条硬规矩：
+Three hard rules:
 
-1. **落库失败不能把整轮对话搞崩**。这是对话主链路，溯源是审计数据不是业务数据，
-   写不进去就降级成一条 warning 日志，回复照常返回。
-2. **用自己的 session**。DialogueStateService 的 session 承载的是 DialogueState 的写入，
-   审计写入不该和它共用事务——审计写挂了不能把对话状态一起回滚掉。
-3. **不改变未命中与降级路径「不调用 LLM」的性质**。这里只有一次 INSERT，
-   兜底话术仍然是常量，机制上依旧无法编造。
+1. **A failed write must never break the turn.** This sits on the main conversation path, and a
+   trace is audit data, not business data. If it cannot be written, degrade to a warning log and
+   return the reply as normal.
+2. **Use its own session.** DialogueStateService's session carries the DialogueState write, and
+   an audit write has no business sharing that transaction — a failed audit write must not roll
+   the dialogue state back with it.
+3. **Do not change the "no LLM call" property of the miss and degraded paths.** There is a single
+   INSERT here; the fallback text is still a constant, so fabrication remains mechanically
+   impossible.
 """
 import logging
 from typing import Any, Iterable
@@ -26,21 +30,21 @@ from business_agent.repository.knowledge_repository import KnowledgeRepository, 
 
 logger = logging.getLogger(__name__)
 
-# 本轮结局
-OUTCOME_ANSWERED = "answered"        # 基于命中分片作答
-OUTCOME_NO_HIT = "no_hit"            # 未命中或全部低于阈值，走兜底话术
-OUTCOME_UNAVAILABLE = "unavailable"  # 向量库 / Embedding 不可用，走降级话术
+# How this turn ended
+OUTCOME_ANSWERED = "answered"        # answered from the retrieved chunks
+OUTCOME_NO_HIT = "no_hit"            # a miss, or everything below threshold — fallback text
+OUTCOME_UNAVAILABLE = "unavailable"  # vector store / embedding unavailable — degraded text
 
-# 分片没进提示词的原因
-DROP_TOP_K = "top_k"                 # 相似度排在 Top-K 之外
-DROP_CONTEXT_BUDGET = "context_budget"  # 上下文 token 预算不够，按相似度从低到高截断
+# Why a chunk did not make it into the prompt
+DROP_TOP_K = "top_k"                 # similarity ranked outside Top-K
+DROP_CONTEXT_BUDGET = "context_budget"  # out of context token budget; dropped lowest similarity first
 
 _tables_ready = False
 
 
 class KnowledgeTraceRecorder:
   """
-  Goal: 把一轮检索的溯源信息写进 retrieval_traces
+  Goal: write one turn's retrieval trace into retrieval_traces
   """
 
   async def record(self,
@@ -52,15 +56,17 @@ class KnowledgeTraceRecorder:
                    dropped: Iterable[tuple[KnowledgeChunk, str]] = (),
                    note: str | None = None) -> int:
     """
-    Goal: 记录一轮检索的溯源证据。任何异常都吞掉，只留日志。
+    Goal: record the trace evidence for one retrieval. Every exception is swallowed and only
+          logged.
     Args:
-        state: 对话状态，关联键（sender_id / session_id / turn_id / message_id）从这里取
+        state: the dialogue state; the correlation keys (sender_id / session_id / turn_id /
+            message_id) come from it
         outcome: OUTCOME_ANSWERED / OUTCOME_NO_HIT / OUTCOME_UNAVAILABLE
-        provider_ids: 本轮参与检索的 Provider ID
-        selected: 真正进了提示词的分片
-        dropped: (分片, 丢弃原因) 列表——Top-K 之外或上下文预算截断掉的
-        note: 补充说明，降级时放错误摘要
-    Returns: int 写入行数；未启用或失败时返回 0
+        provider_ids: the providers queried this turn
+        selected: the chunks that actually reached the prompt
+        dropped: (chunk, reason) pairs — those cut by Top-K or by the context budget
+        note: free-form detail; on the degraded path it carries the error summary
+    Returns: the number of rows written; 0 when disabled or on failure
     """
     if not settings.knowledge_trace_enabled:
       return 0
@@ -77,12 +83,12 @@ class KnowledgeTraceRecorder:
       if not rows:
         return 0
       return await self._write(rows)
-    except Exception as error:  # noqa: BLE001 - 溯源写入绝不允许影响对话
+    except Exception as error:  # noqa: BLE001 - a trace write must never affect the conversation
       logger.warning("retrieval_trace_write_failed outcome=%s sender_id=%s error=%s",
                      outcome, getattr(state, "sender_id", None), error)
       return 0
 
-  # ---------------- 内部 ----------------
+  # ---------------- internals ----------------
 
   def _build_rows(self,
                   state: DialogueState,
@@ -93,9 +99,10 @@ class KnowledgeTraceRecorder:
                   dropped: list[tuple[KnowledgeChunk, str]],
                   note: str | None) -> list[dict[str, Any]]:
     """
-    Goal: 组装待写入的行。命中一片一行；未命中与降级按 Provider 各一行（chunk_id 留空）。
+    Goal: assemble the rows to write. One row per hit chunk; on a miss or a degraded turn, one
+          row per provider with chunk_id left empty.
     Args:
-        见 record
+        see record()
     Returns: list[dict]
     """
     session = state.current_session()
@@ -120,8 +127,8 @@ class KnowledgeTraceRecorder:
     for chunk, reason in dropped:
       rows.append({**base, **self._chunk_fields(chunk), "selected": False, "drop_reason": reason, "note": None})
 
-    # 没有任何分片进来（未命中 / 降级）：按 Provider 各留一行，
-    # 「这一轮为什么兜底了」同样是溯源证据
+    # No chunks at all (miss / degraded): keep one row per provider — "why did this turn fall
+    # back?" is trace evidence just as much as a hit is
     if not rows:
       for provider_id in provider_ids or [""]:
         rows.append({
@@ -154,10 +161,10 @@ class KnowledgeTraceRecorder:
 
   async def _write(self, rows: list[dict[str, Any]]) -> int:
     """
-    Goal: 用独立 session 写入，不与对话状态共用事务
+    Goal: write through its own session, sharing no transaction with the dialogue state
     Args:
         rows
-    Returns: int 写入行数
+    Returns: the number of rows written
     """
     global _tables_ready
 
@@ -165,7 +172,8 @@ class KnowledgeTraceRecorder:
       logger.warning("retrieval_trace_skipped reason=db_not_initialized rows=%s", len(rows))
       return 0
 
-    # 服务进程不跑入库脚本，表可能还不存在，这里按进程做一次性建表
+    # The server process never runs the ingest script, so the tables may not exist yet — create
+    # them once per process here
     if not _tables_ready:
       await ensure_tables(db_client.session_engine)
       _tables_ready = True

@@ -1,10 +1,11 @@
 """
-向量库客户端（Chroma 实现，选型见 meta-business-agent.md 附录 C.4.3）
+Vector store client (Chroma implementation; selection rationale in appendix C.4.3 of
+meta-business-agent.md).
 
-抽象边界只暴露四个方法：upsert / query / delete / count。
-Chroma 的原始返回结构（ids / documents / metadatas / distances 的平行数组）
-一律在本模块内翻译成 VectorMatch，**不允许漏进 knowledge/ 任何一层**——
-规范原话：漏进去换库就是两天的返工。
+The abstraction exposes exactly four methods: upsert / query / delete / count.
+Chroma's raw response shape — parallel arrays of ids / documents / metadatas / distances — is
+translated into VectorMatch inside this module and **must never leak into any layer of
+knowledge/**. The spec puts it plainly: if it leaks, swapping stores becomes two days of rework.
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -16,15 +17,16 @@ from business_agent.config.settings import settings
 
 class VectorStoreUnavailableError(RuntimeError):
   """
-  Goal: 向量库不可用。上层据此走「暂时查不了，帮你转人工」的降级路径，
-        不得退化为用模型自身知识作答（规范 5.1 / C.4.7）。
+  Goal: signal that the vector store is unavailable. Callers use this to take the degraded path
+        ("cannot look this up right now, let me hand you to a human") and must never fall back to
+        answering from the model's own knowledge (spec 5.1 / C.4.7).
   """
 
 
 @dataclass(slots=True)
 class VectorRecord:
   """
-  Goal: 写入向量库的一条记录（中立结构，与具体向量库无关）
+  Goal: one record to write into the vector store (a neutral shape, independent of any store)
   """
   id: str
   vector: list[float]
@@ -35,9 +37,10 @@ class VectorRecord:
 @dataclass(slots=True)
 class VectorMatch:
   """
-  Goal: 检索命中的一条记录
+  Goal: one retrieval hit
   Attributes:
-      score: 余弦相似度，取值 [-1, 1]，越大越相似（已由 Chroma 的 cosine distance 换算）
+      score: cosine similarity in [-1, 1], higher is more similar (already converted from
+          Chroma's cosine distance)
   """
   id: str
   document: str
@@ -47,11 +50,12 @@ class VectorMatch:
 
 def _build_where(filters: dict[str, Any] | None) -> dict[str, Any] | None:
   """
-  Goal: 把 {"source_type": "faq"} / {"source_type": ["faq", "document"]} 这类朴素过滤条件
-        翻译成 Chroma 的 where 语法。多个条件需要显式 $and。
+  Goal: translate plain filters such as {"source_type": "faq"} or
+        {"source_type": ["faq", "document"]} into Chroma's where syntax. Several conditions
+        require an explicit $and.
   Args:
-      filters: metadata 过滤条件，值为列表时按 $in 处理
-  Returns: Chroma where 子句，无过滤时返回 None
+      filters: metadata filters; a list value is treated as $in
+  Returns: a Chroma where clause, or None when there is nothing to filter on
   """
   if not filters:
     return None
@@ -77,8 +81,9 @@ def _build_where(filters: dict[str, Any] | None) -> dict[str, Any] | None:
 
 class ChromaVectorClient:
   """
-  Goal: Chroma 本地持久化实现。进程内可跑，零新增外部服务（规范 C.4.1 第 1 条）。
-        迁移到 PGVector / Qdrant 时只需换掉本类，签名不变。
+  Goal: the local persistent Chroma implementation. Runs in-process and adds no external
+        service (spec C.4.1, rule 1). Migrating to PGVector or Qdrant means replacing this class
+        alone; the signatures do not change.
   """
 
   def __init__(self,
@@ -88,12 +93,12 @@ class ChromaVectorClient:
     self._collection_name = collection_name or settings.vector_collection_name
     self._collection = None
 
-  # ---------------- 内部：延迟初始化 ----------------
+  # ---------------- internals: lazy initialisation ----------------
 
   def _get_collection(self):
     """
-    Goal: 延迟建立 Chroma 连接。导入本模块不应产生磁盘 IO，
-          否则任何 import 都要为向量库的可用性买单。
+    Goal: connect to Chroma lazily. Importing this module must not do disk IO, or every import
+          in the project ends up paying for the vector store's availability.
     Returns: chromadb Collection
     Raises: VectorStoreUnavailableError
     """
@@ -105,10 +110,10 @@ class ChromaVectorClient:
 
       self._persist_dir.mkdir(parents=True, exist_ok=True)
       client = chromadb.PersistentClient(path=str(self._persist_dir))
-      # 余弦相似度：Chroma 默认是 L2，必须显式指定 space=cosine，
-      # 否则阈值 0.35 的语义完全对不上（规范 C.4.2 检索环节）。
-      # embedding_function=None：向量由 DashScope 在外部算好后传入，
-      # 不让 Chroma 拉起自带的本地 ONNX 模型。
+      # Cosine similarity: Chroma defaults to L2, so space=cosine has to be stated explicitly —
+      # otherwise the threshold means something else entirely (spec C.4.2, retrieval).
+      # embedding_function=None: vectors are computed externally by DashScope and passed in, so
+      # Chroma never spins up its bundled local ONNX model.
       self._collection = client.get_or_create_collection(
         name=self._collection_name,
         metadata={"hnsw:space": "cosine"},
@@ -118,14 +123,14 @@ class ChromaVectorClient:
     except Exception as error:  # noqa: BLE001
       raise VectorStoreUnavailableError(f"chroma unavailable at {self._persist_dir}: {error}") from error
 
-  # ---------------- 对外四个方法 ----------------
+  # ---------------- the four public methods ----------------
 
   async def upsert(self, chunks: list[VectorRecord]) -> int:
     """
-    Goal: 写入 / 覆盖一批向量记录（按 id 幂等）
+    Goal: write or overwrite a batch of vector records (idempotent on id)
     Args:
-        chunks: VectorRecord 列表
-    Returns: int 实际写入条数
+        chunks: a list of VectorRecord
+    Returns: how many records were actually written
     Raises: VectorStoreUnavailableError
     """
     if not chunks:
@@ -148,12 +153,12 @@ class ChromaVectorClient:
                   top_k: int,
                   filters: dict[str, Any] | None = None) -> list[VectorMatch]:
     """
-    Goal: 按余弦相似度检索 Top-K，支持 metadata 过滤
+    Goal: retrieve Top-K by cosine similarity, with optional metadata filtering
     Args:
-        vector: 查询向量
-        top_k: 返回条数上限
-        filters: metadata 过滤条件，例如 {"source_type": ["faq"]}
-    Returns: list[VectorMatch] 按相似度从高到低排序
+        vector: the query vector
+        top_k: maximum number of hits to return
+        filters: metadata filters, e.g. {"source_type": ["faq"]}
+    Returns: list[VectorMatch], sorted by similarity, highest first
     Raises: VectorStoreUnavailableError
     """
 
@@ -171,10 +176,11 @@ class ChromaVectorClient:
 
   async def delete(self, source_id: str) -> int:
     """
-    Goal: 删除某个知识源的全部分片（知识源更新时先删后写，保证索引与文档同步）
+    Goal: delete every chunk belonging to a knowledge source. Updating a source deletes before
+          writing, which keeps the index in step with the document.
     Args:
-        source_id: 知识源 ID
-    Returns: int 删除条数
+        source_id: the knowledge source id
+    Returns: how many records were deleted
     Raises: VectorStoreUnavailableError
     """
 
@@ -191,7 +197,7 @@ class ChromaVectorClient:
 
   async def count(self) -> int:
     """
-    Goal: 返回索引内分片总数
+    Goal: the total number of chunks in the index
     Returns: int
     Raises: VectorStoreUnavailableError
     """
@@ -201,12 +207,13 @@ class ChromaVectorClient:
 
     return await self._call(_run)
 
-  # ---------------- 内部：线程池调度 ----------------
+  # ---------------- internals: thread-pool dispatch ----------------
 
   @staticmethod
   async def _call(func):
     """
-    Goal: Chroma 客户端是同步的，放到线程里跑，避免阻塞事件循环
+    Goal: the Chroma client is synchronous, so run it in a thread rather than blocking the event
+          loop
     """
     try:
       return await asyncio.to_thread(func)
@@ -218,10 +225,10 @@ class ChromaVectorClient:
 
 def _to_matches(raw: dict[str, Any]) -> list[VectorMatch]:
   """
-  Goal: 把 Chroma 的平行数组返回结构翻译成 VectorMatch 列表
-        cosine distance = 1 - cosine similarity，这里换算回相似度
+  Goal: translate Chroma's parallel-array response into a list of VectorMatch.
+        cosine distance = 1 - cosine similarity, converted back to similarity here.
   Args:
-      raw: collection.query 的原始返回
+      raw: the raw return value of collection.query
   Returns: list[VectorMatch]
   """
   ids = (raw.get("ids") or [[]])[0]
@@ -247,7 +254,8 @@ _vector_client: ChromaVectorClient | None = None
 
 def get_vector_client() -> ChromaVectorClient:
   """
-  Goal: 进程内单例。Chroma 的 PersistentClient 同一目录只应开一份。
+  Goal: a per-process singleton. Only one Chroma PersistentClient should ever be open on a
+        given directory.
   Returns: ChromaVectorClient
   """
   global _vector_client

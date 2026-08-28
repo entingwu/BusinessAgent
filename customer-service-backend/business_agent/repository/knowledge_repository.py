@@ -1,14 +1,17 @@
 """
-知识源与知识分片的元数据落库（规范 C.4.8）
+Metadata persistence for knowledge sources and chunks (spec C.4.8).
 
-向量与文档正文在 Chroma 里，这里存的是「运维视角」需要的东西：
-知识源类型、名称、入库时间、**Embedding 模型名**。
-模型名必须落库——换了模型就必须全量重建索引（维度与向量空间都变，规范 C.4.4），
-没有这一列就看不出来索引已经脏了。
+The vectors and the document text live in Chroma; what is stored here is what an operator needs:
+source type, name, ingest time, and **the embedding model name**.
 
-另外还有一张 retrieval_traces：入库侧的两张表回答「知识库里有什么」，
-retrieval_traces 回答「哪一轮回复用了哪几片、相似度多少」，两者没有关联关系，
-不要指望 knowledge_chunks 能替代它做溯源。
+The model name has to be persisted — changing models forces a full reindex (both the dimensions
+and the vector space change, spec C.4.4), and without this column there is no way to see that the
+index has gone stale.
+
+There is also a third table, retrieval_traces. The two ingest-side tables answer "what is in the
+knowledge base"; retrieval_traces answers "which chunks did this turn's answer use, and at what
+similarity". They are not related to one another — do not expect knowledge_chunks to serve as a
+substitute for tracing.
 """
 import asyncio
 from dataclasses import dataclass
@@ -28,12 +31,12 @@ def _now() -> datetime:
 
 
 class KnowledgeSourceRecord(Base):
-  """知识源：一份 FAQ 表 / 一篇政策文档"""
+  """A knowledge source: one FAQ table, or one policy document."""
   __tablename__ = "knowledge_sources"
 
   source_id: Mapped[str] = mapped_column(String(128), primary_key=True)
   source_type: Mapped[str] = mapped_column(String(32), nullable=False)          # faq / document
-  name: Mapped[str] = mapped_column(String(255), nullable=False)                # 展示用名称
+  name: Mapped[str] = mapped_column(String(255), nullable=False)                # display name
   file_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")
   embedding_model: Mapped[str] = mapped_column(String(64), nullable=False)
   embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -43,15 +46,16 @@ class KnowledgeSourceRecord(Base):
 
 
 class KnowledgeChunkRecord(Base):
-  """知识分片：来源标识（知识源 ID、标题、片段位置）在这里，检索结果靠它溯源"""
+  """A knowledge chunk. Its provenance — source id, title, position — lives here, and that is
+  what makes a retrieval result traceable."""
   __tablename__ = "knowledge_chunks"
 
   chunk_id: Mapped[str] = mapped_column(String(160), primary_key=True)
   source_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
   source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="")
   source_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-  title: Mapped[str] = mapped_column(String(255), nullable=False, default="")      # 分片标题（章节名 / FAQ 问题）
-  position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)        # 片段在知识源内的序号
+  title: Mapped[str] = mapped_column(String(255), nullable=False, default="")      # chunk title (section name / FAQ question)
+  position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)        # index of the chunk within its source
   token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
   content: Mapped[str] = mapped_column(TEXT, nullable=False)
   embedding_model: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -60,42 +64,51 @@ class KnowledgeChunkRecord(Base):
 
 class RetrievalTraceRecord(Base):
   """
-  Goal: 按轮次记录知识检索的溯源证据，回答「这一轮回复用了哪几片、相似度多少」
-        （规范 3.1.2「内部记录命中的分片 ID 与相似度」、5.2「基于文档知识的回复可溯源到具体分片」）。
+  Goal: record per-turn trace evidence for knowledge retrieval, answering "which chunks did this
+        turn's answer use, and at what similarity" (spec 3.1.2, "record hit chunk ids and
+        similarities internally", and 5.2, "answers grounded in document knowledge trace back to
+        specific chunks").
 
-  为什么单独一张表，而不是塞进 dialogue_states 的 state_json：
-    1. state_json 是整个 DialogueState 的序列化结果，往里塞检索明细会让它继续膨胀，
-       而规范 第一档 本来就要把消息拆表，此处不宜再加重
-    2. 溯源是审计数据，读法是「按 turn_id / sender_id 查」，需要索引，JSON 列做不到
-    3. 溯源写失败绝不能影响对话，独立表可以独立事务、独立降级
+  Why a separate table rather than stuffing it into dialogue_states.state_json:
+    1. state_json is the serialisation of the entire DialogueState; adding retrieval detail keeps
+       inflating it, and tier 1 of the spec already calls for splitting messages out — this is no
+       place to add weight.
+    2. A trace is audit data, read by "query by turn_id / sender_id". That needs indexes, which a
+       JSON column cannot give.
+    3. A failed trace write must never affect the conversation, and a separate table can have its
+       own transaction and its own degradation.
 
-  为什么一片一行而不是一轮一行 JSON：
-    调阈值时要按 score 做聚合（「兜底那批的最高分都落在哪个区间」），一片一行才查得动。
+  Why one row per chunk rather than one JSON row per turn:
+    Tuning the threshold means aggregating by score ("what range do the top scores of the
+    fallback turns fall into"), and only one-row-per-chunk is queryable that way.
 
-  未命中与降级也会落一行（chunk_id 为空、outcome 标明原因）——
-  「这一轮为什么兜底了」和「这一轮引用了什么」同等重要。
+  Misses and degraded turns get a row too (chunk_id empty, outcome saying why) — "why did this
+  turn fall back?" matters exactly as much as "what did this turn cite?".
 
-  **不落的是「低于阈值被 Provider 挡掉的候选」**：它们从来没进过 responder，
-  Provider.retrival 的签名（返回 list[KnowledgeChunk]）不允许把它们额外带出来，
-  而为此在 Provider 上挂实例状态会在引擎被缓存复用时变成并发隐患。
-  这批候选的 chunk_id 与相似度打在 knowledge_retrieval 那行日志的 rejected=[...] 里，
-  「差多少才够阈值」去日志查（日志级别由 KNOWLEDGE_LOG_LEVEL 控制）。
+  **What is deliberately not recorded: candidates the provider rejected for scoring below the
+  threshold.** They never reach the responder, and Provider.retrival's signature (returning
+  list[KnowledgeChunk]) has no way to carry them out; hanging instance state on the provider to
+  do so would become a concurrency hazard once the engine is cached and reused.
+  Those candidates' chunk ids and similarities go into the rejected=[...] field of the
+  knowledge_retrieval log line instead, so "how far short of the threshold was it?" is answered
+  from the log (level controlled by KNOWLEDGE_LOG_LEVEL).
   """
   __tablename__ = "retrieval_traces"
 
   id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-  # 关联键：全部取自 DialogueState，不需要改 domain 层
+  # Correlation keys, all taken from DialogueState — no change to the domain layer needed
   sender_id: Mapped[str] = mapped_column(String(128), nullable=False)
   session_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
   turn_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
   message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
-  # 本轮结局：answered（基于分片作答）/ no_hit（未命中兜底）/ unavailable（检索链路降级）
+  # How the turn ended: answered (built from chunks) / no_hit (miss, fallback) /
+  # unavailable (retrieval stack degraded)
   outcome: Mapped[str] = mapped_column(String(16), nullable=False)
   provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
-  # 分片溯源信息，未命中与降级时为空
+  # Chunk provenance; empty on a miss or a degraded turn
   chunk_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
   source_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
   source_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -103,14 +116,17 @@ class RetrievalTraceRecord(Base):
   position: Mapped[int | None] = mapped_column(Integer, nullable=True)
   score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-  # 是否真的进了提示词。Top-K 与上下文 token 预算截断掉的分片也记，便于事后调阈值
+  # Whether it actually reached the prompt. Chunks cut by Top-K or by the context token budget
+  # are recorded too, which is what makes tuning the threshold afterwards possible
   selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
   drop_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-  # 降级时的失败原因摘要（轮级：哪个 Provider 先炸导致整轮降级）；命中与未命中时为空
+  # Failure summary on a degraded turn (turn-level: which provider failed first and took the
+  # whole turn down); empty on hits and misses
   note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-  # 当时的检索配置，换阈值 / 换模型后回读历史记录不至于对不上账
+  # The retrieval configuration at the time, so historical rows still reconcile after the
+  # threshold or the model changes
   threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
   embedding_model: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
@@ -124,7 +140,8 @@ class RetrievalTraceRecord(Base):
 
 @dataclass(slots=True)
 class SourceSummary:
-  """Goal: 给命令行展示用的知识源摘要，不把 ORM 对象漏出仓储层"""
+  """Goal: a knowledge-source summary for the CLI to display, so no ORM object leaks out of the
+  repository layer."""
   source_id: str
   source_type: str
   name: str
@@ -145,7 +162,7 @@ class SourceSummary:
 
 async def ensure_tables(engine) -> None:
   """
-  Goal: 建表。只建知识库这三张，不碰 dialogue_states。
+  Goal: create tables. Only these three knowledge tables — never dialogue_states.
   Args:
       engine: AsyncEngine
   """
@@ -159,7 +176,7 @@ async def ensure_tables(engine) -> None:
 
 
 class KnowledgeRepository:
-  """Goal: 知识源 / 分片元数据的读写"""
+  """Goal: read and write knowledge source / chunk metadata."""
 
   def __init__(self, session: AsyncSession):
     self._session = session
@@ -175,12 +192,13 @@ class KnowledgeRepository:
                           chunk_count: int,
                           content_hash: str) -> None:
     """
-    Goal: 新增或更新一个知识源的元数据（按 source_id 幂等）
+    Goal: insert or update one knowledge source's metadata (idempotent on source_id)
     Args:
         source_id / source_type / name / file_path
-        embedding_model / embedding_dimensions: 换模型必须重建索引，故与索引一起落库
-        chunk_count: 本次入库的分片数
-        content_hash: 原文哈希，用于判断是否需要重新入库
+        embedding_model / embedding_dimensions: changing models forces a reindex, so they are
+            persisted alongside the index
+        chunk_count: how many chunks this ingest produced
+        content_hash: hash of the source text, used to decide whether a re-ingest is needed
     """
     values = {
       "source_id": source_id,
@@ -201,10 +219,11 @@ class KnowledgeRepository:
 
   async def replace_chunks(self, source_id: str, chunk_rows: list[dict[str, Any]]) -> None:
     """
-    Goal: 用新分片整体替换该知识源的旧分片（先删后插，保证更新后不留孤儿分片）
+    Goal: replace this source's chunks wholesale (delete then insert, so an update leaves no
+          orphaned chunks behind)
     Args:
-        source_id: 知识源 ID
-        chunk_rows: 分片字典列表，键与 KnowledgeChunkRecord 的列同名
+        source_id: the knowledge source id
+        chunk_rows: a list of dicts whose keys match KnowledgeChunkRecord's columns
     """
     await self._session.execute(
       delete(KnowledgeChunkRecord).where(KnowledgeChunkRecord.source_id == source_id)
@@ -214,10 +233,10 @@ class KnowledgeRepository:
 
   async def delete_source(self, source_id: str) -> int:
     """
-    Goal: 删除知识源及其全部分片元数据
+    Goal: delete a knowledge source and all of its chunk metadata
     Args:
         source_id
-    Returns: int 删除的分片数
+    Returns: the number of chunks deleted
     """
     cursor = await self._session.execute(
       delete(KnowledgeChunkRecord).where(KnowledgeChunkRecord.source_id == source_id)
@@ -229,7 +248,7 @@ class KnowledgeRepository:
 
   async def get_source_hash(self, source_id: str) -> str | None:
     """
-    Goal: 取知识源上次入库时的原文哈希，用于跳过没变化的文档
+    Goal: read a source's content hash from its last ingest, so unchanged documents are skipped
     Args:
         source_id
     Returns: str | None
@@ -241,7 +260,7 @@ class KnowledgeRepository:
 
   async def list_sources(self) -> list[SourceSummary]:
     """
-    Goal: 列出全部知识源
+    Goal: list every knowledge source
     Returns: list[SourceSummary]
     """
     cursor = await self._session.execute(
@@ -261,7 +280,7 @@ class KnowledgeRepository:
 
   async def count_chunks(self) -> int:
     """
-    Goal: 分片元数据总数（与向量库 count() 对账用）
+    Goal: total chunk-metadata count, for reconciling against the vector store's count()
     Returns: int
     """
     cursor = await self._session.execute(select(func.count()).select_from(KnowledgeChunkRecord))
@@ -269,10 +288,10 @@ class KnowledgeRepository:
 
   async def record_retrieval_traces(self, trace_rows: list[dict[str, Any]]) -> int:
     """
-    Goal: 批量写入一轮对话的检索溯源记录
+    Goal: bulk-write one turn's retrieval trace rows
     Args:
-        trace_rows: 字典列表，键与 RetrievalTraceRecord 的列同名
-    Returns: int 写入行数
+        trace_rows: a list of dicts whose keys match RetrievalTraceRecord's columns
+    Returns: the number of rows written
     """
     if not trace_rows:
       return 0
@@ -281,7 +300,7 @@ class KnowledgeRepository:
 
   async def list_retrieval_traces(self, sender_id: str, limit: int = 50) -> list[dict[str, Any]]:
     """
-    Goal: 按用户回读检索溯源记录（排查「这一轮凭什么这么答」用）
+    Goal: read retrieval traces back by user, for investigating "what justified this answer?"
     Args:
         sender_id / limit
     Returns: list[dict]
@@ -311,10 +330,10 @@ class KnowledgeRepository:
 
   async def delete_retrieval_traces(self, sender_id_prefix: str) -> int:
     """
-    Goal: 清理探针数据（sender_id 前缀匹配）
+    Goal: clean up probe data, matched by sender_id prefix
     Args:
         sender_id_prefix
-    Returns: int 删除行数
+    Returns: the number of rows deleted
     """
     cursor = await self._session.execute(
       delete(RetrievalTraceRecord).where(RetrievalTraceRecord.sender_id.like(f"{sender_id_prefix}%"))
