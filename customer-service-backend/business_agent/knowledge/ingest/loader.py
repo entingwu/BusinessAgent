@@ -130,7 +130,12 @@ def load_source(root_dir: Path, file_path: Path) -> LoadedSource:
     source_id=source_id,
     source_type=source_type,
     name=name,
-    file_path=str(file_path),
+    # Store the path **relative to the knowledge source root**, not an absolute one.
+    # Absolute paths bake in whichever checkout ran the ingest — and when that checkout is a
+    # temporary git worktree, deleting it leaves metadata pointing at a path that no longer
+    # exists, with nothing to catch it: ingest only compares content_hash and stats only counts
+    # rows. A relative path is identical across every checkout, so the failure cannot happen.
+    file_path=str(file_path.relative_to(root_dir)),
     split_mode=split_mode,
     content_hash=content_hash,
     entries=entries,
