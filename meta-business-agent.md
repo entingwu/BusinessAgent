@@ -805,6 +805,20 @@ meta-business-agent/
 |---|---|---|
 | **无 CUDA，但有 MPS** | Apple M1 Max，`torch.backends.mps.is_available() == True` | atguigu 的 `pyproject.toml` 强制走 `download.pytorch.org/whl/cu128`，**本机装不上**，须用默认 PyPI 的 arm64 轮子；`use_fp16` 关闭（需 CUDA）。**但 Metal 后端可用，不是只能纯 CPU** —— 实测见下 |
 | Docker 内存 8GB | MySQL 已占一部分 | Milvus standalone 官方建议 ≥8GB，45 片量级跑得动但需上调 Docker Desktop 上限 |
+
+**Phase 1 实测（2026-08-28）：内存担心大幅过度了。** Milvus 三容器空载合计约 **330MB**，不是预算的 4.3GB：
+
+| 容器 | 实测占用 | 设定上限 |
+|---|---|---|
+| milvus-standalone | 211.5 MiB | 3 GiB |
+| milvus-minio | 101.2 MiB | 768 MiB |
+| milvus-etcd | 17.4 MiB | 512 MiB |
+| （对照）ecommerce-mysql | 443 MiB | — |
+
+「官方建议 ≥8GB」是**生产规模**的建议；45 片语料下完全用不到。**Docker 内存从 8GB 调到 12GB 这一步事后看并非必需**——记下来是为了以后别再用「官方建议」直接推导本项目的资源需求，那两者差了一个数量级。余量留着不亏（索引加载与并发检索时占用会涨），但当时把它当成阻塞项、为它协调三个会话停工，代价高于收益。
+
+重启 Docker 的代价倒是真实发生了：两个中台容器 `Exited (137/143)` 且**没有自动回来**，要手工 `docker start`；期间 18082 上的对话后端连接池断掉（探针 500），但 MySQL 一回来就自愈成 200——**连接池断了不等于要重启进程**，当时若按预案去重启那个不属于自己的进程就是一次不必要的破坏。
+
 | 磁盘剩 32GB | BGE-M3 权重 ~2.3GB + torch 全家桶 + Milvus 镜像 ~2GB | 够用，装完约剩 25GB |
 
 **Phase 2 实测（2026-08-28，BGE-M3 本地）：**
@@ -827,7 +841,7 @@ dense 1024 维（与 `text-embedding-v3` 相同，元数据表的 `embedding_dim
 | Phase | 内容 | 人天 |
 |---|---|---:|
 | **0** | **固定基线**：用 34 条校准集跑一遍现行实现，冻结对照数字 ✅ 已完成 | 0.5 |
-| **1** | `docker-compose` 加 Milvus standalone 三容器（独立 project name，不碰 `ecommerce`） | 0.5–1 |
+| **1** | `docker-compose` 加 Milvus standalone 三容器（独立 project name，不碰 `ecommerce`） | 0.5–1 ✅ |
 | **2** | BGE-M3 本地化（照搬 `embedding_utils.py`）—— **风险最高的一步**，见 C.4.9.2 | 0.5–1 |
 | **3** | 建表 + 入库改写 + **全量重建索引**（照搬 `_create_chunks_collection`，字段换成本项目的溯源字段） | 0.5–1 |
 | **4** | 混合检索接进现有 Provider（照搬 `milvus_utils.py` 的 `AnnSearchRequest` + `WeightedRanker`） | 0.5 |
