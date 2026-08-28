@@ -15,7 +15,7 @@ from business_agent.knowledge.handler import KnowledgeHandler
 from business_agent.plan.planner import TurnPlanner
 from business_agent.plan.turn_plan import ClarifyReason, TurnPlan
 from business_agent.plan.validator import TurnPlanValidator
-from business_agent.task.commands.command import Command, SetSlotsCommand
+from business_agent.task.commands.command import Command, SetSlotsCommand, StartFlowCommand
 from business_agent.task.flows.flows import FlowList
 from business_agent.task.flows.steps import CollectionFlowStep
 from business_agent.task.handler import TaskHandler
@@ -120,17 +120,35 @@ class DialogueEngine:
         user_message: 本轮用户消息，卡片消息没有文本
         state:
         bot_messages: 本轮已经产生的回复
-        handoff_flow_ran: 本轮是否已经跑过 human_handoff 流程。跑过就别再补提示——
-                          那个流程自己会说「我来为你转接人工客服」，
+        handoff_flow_ran: 本轮是否已经跑过 human_handoff 流程。跑过就直接移交控制权、
+                          且不再补提示——那个流程自己会说「我来为你转接人工客服」，
                           否则一次转接会连着播三句意思相同的话
     Returns:
         可能追加了提示的回复列表
     """
+    # 规划器启动 human_handoff 本身就是一次移交决定，不需要再让关键词表复核一遍。
+    # 这里必须先于 evaluate：evaluate 在 handled_by_flow=True 时会压掉高风险话题触发
+    # （那条压制是对的，它挡住了「你们退货政策几天」被 RISKY_TOPIC 劫持成转人工），
+    # 但 human_handoff 恰恰是唯一一个该移交控制权的流程。
+    #
+    # 不修的后果实测过：「我要投诉你们，我要找人工」——「找人工」不在关键词表里
+    # （表里是「找客服」），planner 却正确地启动了 human_handoff，于是用户听到
+    # 「我来为你转接人工客服」，而 control_owner 停在 AGENT：输入框不锁、没人被叫、
+    # 用户在等一个从未被召唤的坐席。界面宣称成功而系统什么都没做，比直接报错更糟。
+    if handoff_flow_ran:
+      if state.control_owner is not handoff_control.ControlOwner.PENDING_HUMAN:
+        state.request_handoff(handoff_control.HandoffTrigger.USER_REQUESTED,
+                              "规划器启动了 human_handoff 流程")
+      # 流程自己已经说了「我来为你转接人工客服」，不再追加提示
+      return bot_messages
+
     decision = handoff_control.evaluate(
       text=user_message.text,
       consecutive_clarify=state.consecutive_clarify,
       consecutive_knowledge_miss=state.consecutive_knowledge_miss,
       handled_by_flow=handled_by_flow,
+      # 规范 3.3.4「命中配置关键词」：商家可在 HANDOFF_KEYWORDS 里加自己的高危词
+      extra_keywords=handoff_control.configured_keywords(),
     )
     if not decision.needed:
       return bot_messages
@@ -138,7 +156,7 @@ class DialogueEngine:
     # 已经在排队了就不再重复提示，否则用户每说一句都收到一遍「正在转接」
     already_pending = state.control_owner is handoff_control.ControlOwner.PENDING_HUMAN
     state.request_handoff(decision.trigger, decision.reason)
-    if already_pending or handoff_flow_ran:
+    if already_pending:
       return bot_messages
 
     notice = handoff_control.PENDING_NOTICE.get(decision.trigger)
@@ -231,8 +249,18 @@ class DialogueEngine:
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:
+      # 必须同时判类型：ResumeFlowCommand / CancelFlowCommand 也有 flow 字段，
+      # 光用 getattr(command, "flow") 会把它们一起算进来。
+      #
+      # 这个判据从前只用来抑制一句重复提示，误判无代价；现在它决定控制权归属，
+      # 误判就变成会话状态被悄悄改写。实测过的漏洞：用户说「继续刚才的转人工」，
+      # 规划器给出 ResumeFlowCommand(flow='human_handoff')——而 human_handoff
+      # 一轮内 start→respond→end 走完，永远不会进 paused_tasks，恢复必然失败。
+      # 于是机器人回「当前没有找到可以继续的业务流程」，同时 control_owner
+      # 被标成 PENDING_HUMAN 且一句提示都没有：系统状态和它自己说的话直接矛盾。
       handoff_flow_ran = any(
-        getattr(command, "flow", None) == HUMAN_HANDOFF_FLOW_ID for command in turn_plan.task.commands)
+        isinstance(command, StartFlowCommand) and command.flow == HUMAN_HANDOFF_FLOW_ID
+        for command in turn_plan.task.commands)
       return await self.task_handler.handle(turn_plan.task.commands, dialogue_state), handoff_flow_ran, True
     elif turn_plan.knowledge is not None:
       return await self.knowledge_handler.handle(dialogue_state,turn_plan.knowledge.intents), False, True

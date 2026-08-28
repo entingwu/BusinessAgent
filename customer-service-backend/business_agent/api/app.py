@@ -9,10 +9,13 @@ from fastapi import FastAPI
 from business_agent.api import chat_router
 from business_agent.infrastructure.db_client import dispose_engine, init_db_engine
 from business_agent.infrastructure.http_client import init_http_client, disposed_http_client
+from business_agent.observability import configure_logging
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
   # 1. Initialize all resources
+  #    日志最先配，否则后面初始化过程中的日志一行都看不见
+  configure_logging()
   init_db_engine()
   init_http_client()
 

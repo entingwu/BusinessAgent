@@ -9,6 +9,8 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from business_agent.config.settings import settings
+
 
 class ControlOwner(str, Enum):
   """
@@ -61,6 +63,19 @@ HUMAN_REQUEST_KEYWORDS: tuple[str, ...] = (
 # 取 3 而不是 2：LLM 偶发一次跑偏很常见，2 次会把大量正常会话误踢给人工；
 # 3 次基本可以确定是 Agent 真的处理不了。
 REPEATED_FAILURE_THRESHOLD = 3
+
+
+def configured_keywords() -> tuple[str, ...]:
+  """
+  Goal: 读商家配置的转人工关键词（规范 3.3.4 五种触发里的「命中配置关键词」）
+
+  此前 evaluate 的 extra_keywords 参数有定义、有自用，但**零调用方传值**——
+  这条触发在代码里假装支持、实际永不可达。现在由 HANDOFF_KEYWORDS 配置项供给。
+  """
+  raw = (settings.handoff_keywords or "").strip()
+  if not raw:
+    return ()
+  return tuple(keyword.strip() for keyword in raw.split(",") if keyword.strip())
 
 
 @dataclass(slots=True)

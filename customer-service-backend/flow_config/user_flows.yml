@@ -83,7 +83,7 @@ flows:
         type: action
         action: action_response
         args:
-          text: "你好，这里是 Atguigu 电商助手。我可以帮你查订单状态、查物流、了解商品信息，或者提交退款申请。"
+          text: "你好，我是 Business Agent。我可以帮你查订单状态、查物流、了解商品信息，或者提交退款申请。"
         next: end
 
       - id: end
@@ -222,6 +222,39 @@ flows:
       - id: recommend
         type: action
         action: action_recommend_products
+        next: wait_more
+
+      # 收敛回路（规范 3.3.3 第 4 步）。用 action_listen 停在原地等下一句，
+      # 而不是走 end——流程一旦 end，用户再说什么都得从头收集偏好。
+      #
+      # 关键在于快捷回复给的是**值**（「商务」「300 以内」）而不是维度名
+      # （「换个风格」「放宽预算」）。上一次失败就在这里：文案里出现「预算」
+      # 「用途」这类维度名，规划器会把整句当成在填那个槽位，收敛槽位永远为空。
+      # 给值则相反——规划器把「商务」填进 product_style 正是它该做的事，
+      # 顺着它走而不是跟它打架。
+      - id: wait_more
+        type: action
+        action: action_listen
+        # 回路要有出口，否则 end 永远不可达、流程只能靠取消退出，
+        # 而被打断的任务还会留在任务栈里等着被恢复成死循环。
+        # 上限 5 轮：3.3.3 要的是「两轮收敛」，5 轮足够宽裕；上限是安全阀，
+        # 不是用来把还在认真挑的用户掐掉的
+        next:
+          - if: "int(slots.get('product_round') or 0) >= 5"
+            then: wrap_up
+          - else: recommend
+
+      # 出口不能直接连 end。action_listen 会把 step_id 推到下一步就中断本轮，
+      # 于是 end 要到「用户再说一句话」的那一轮才执行——而 end 自己不产出任何
+      # 消息，用户得到的是一片空白。实测：走完上限那轮点一下机器人自己刚给的
+      # 收敛按钮，响应就是 messages: []，再点一次还是空。
+      # 收尾必须有一句话，并且给出真正的下一步
+      - id: wrap_up
+        type: action
+        action: action_response
+        args:
+          text: "我们已经挑了几轮了。要是还没看到合适的，可以换个思路重新跟我说说需求，或者我帮你转人工。"
+          suggestions: [ "重新推荐", "转人工" ]
         next: end
 
       - id: end

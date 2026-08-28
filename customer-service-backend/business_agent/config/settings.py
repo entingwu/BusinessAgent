@@ -15,6 +15,14 @@ class Settings(BaseSettings):
   app_host: str
   app_port: int # APP_PORT=18082 自动转换成int类型
 
+  # 应用日志级别。有默认值，所以不需要改 .env——不像 RAG 那批必填键，
+  # 缺了它不该让服务起不来
+  log_level: str = "INFO"
+
+  # 商家自定义的转人工关键词，逗号分隔（规范 3.3.4「命中配置关键词」）。
+  # 有默认值（空）——不配就等于不启用这条触发，不该让服务起不来
+  handoff_keywords: str = ""
+
   # ---------------- 知识库 / RAG（选型见 meta-business-agent.md 附录 C.4）----------------
   # Embedding 与 LLM 同源复用 DashScope 凭据（LLM_API_KEY / LLM_BASE_URL），不引第二套凭据。
   # 入库与检索必须走同一个模型，因此模型名只在这一处配置。

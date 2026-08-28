@@ -28,6 +28,11 @@ SLOT_TO_ATTR: dict[str, str] = {
 # 3.3.3 要的是「两轮收敛」，每轮给少量候选才收敛得动
 MAX_CARDS = 4
 
+# 收敛按钮的候选值。给值不给维度名——见 user_flows.yml 里 wait_more 的注释。
+# 值取自槽位 description 里列的可选值，规划器认得
+STYLE_VALUES = ("极简", "商务", "电竞", "北欧")
+BUDGET_VALUES = ("300 以内", "500 以内", "1000 以内")
+
 
 class ActionRecommendProducts(Action):
   name = "action_recommend_products"
@@ -53,25 +58,63 @@ class ActionRecommendProducts(Action):
     # 那是把自己的故障当成业务结论告诉用户
     if data is None:
       logger.warning("recommend_products search_failed attrs=%s max_price=%s", attrs, max_price)
-      return ActionResult(messages=[BotMessage(
-        text="商品服务暂时没有响应，我这边查不了。你可以稍后再问一次，或者让我帮你转人工。",
-        suggestions=["稍后再试", "转人工"],
-      )])
+      # 计数照写。三条返回路径里漏掉任何一条，wait_more 的出口条件就永远不成立——
+      # 中台持续故障时每一轮都回到 recommend，流程再也退不出去，
+      # 正是 user_flows.yml 那条「回路要有出口」想防的情况
+      return ActionResult(
+        messages=[BotMessage(
+          text="商品服务暂时没有响应，我这边查不了。你可以稍后再问一次，或者让我帮你转人工。",
+          suggestions=["稍后再试", "转人工"],
+        )],
+        updated_slots={"product_round": self._next_round(slots)},
+      )
 
     items = data.get("items") or []
     if not items:
-      # 不在这里挂按钮：紧跟其后的 ask_refine 步骤会出一套，
-      # 两处都挂会叠成两排。收敛选项只有一个出处
-      return ActionResult(messages=[BotMessage(text=self._no_match_text(attrs, max_price))])
+      # 无结果时更需要出路：没有按钮用户就只能自己想怎么改条件
+      return ActionResult(
+        messages=[BotMessage(
+          text=self._no_match_text(attrs, max_price),
+          suggestions=self._refine_suggestions(slots),
+        )],
+        updated_slots={"product_round": self._next_round(slots)},
+      )
 
     cards = [self._to_card(item) for item in items]
     total = data.get("total") or len(items)
-    # 不在这里挂按钮：紧跟其后的 ask_refine 步骤会出一套收敛选项，
-    # 两处都挂会叠成两排
-    return ActionResult(messages=[BotMessage(
-      text=self._headline(attrs, max_price, shown=len(cards), total=total),
-      cards=cards,
-    )])
+    return ActionResult(
+      messages=[BotMessage(
+        text=self._headline(attrs, max_price, shown=len(cards), total=total),
+        cards=cards,
+        suggestions=self._refine_suggestions(slots),
+      )],
+      updated_slots={"product_round": self._next_round(slots)},
+    )
+
+  def _next_round(self, slots: dict[str, Any]) -> str:
+    """收敛轮次。wait_more 用它决定还回不回 recommend——回路必须有出口"""
+    try:
+      return str(int(slots.get("product_round") or 0) + 1)
+    except (TypeError, ValueError):
+      return "1"
+
+  def _refine_suggestions(self, slots: dict[str, Any]) -> list[str]:
+    """
+    Goal: 给出能真正改变下一次检索的收敛选项
+
+    只给还没选过的值——把当前已选的风格再列一遍等于让用户点了没变化，
+    那正是这个按钮此前被判为「死的」的原因
+    """
+    current_style = str(slots.get("product_style") or "")
+    suggestions = [style for style in STYLE_VALUES if style != current_style][:2]
+
+    current_budget = str(slots.get("product_budget") or "")
+    tighter = next((budget for budget in BUDGET_VALUES if budget != current_budget), None)
+    if tighter:
+      suggestions.append(tighter)
+
+    suggestions.append("不用了")
+    return suggestions
 
   def _to_card(self, item: dict[str, Any]) -> FocusedObject:
     """

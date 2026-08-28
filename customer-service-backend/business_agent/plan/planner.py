@@ -1,5 +1,7 @@
 from dataclasses import asdict
 import json
+import logging
+import time
 from typing import Any
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
@@ -11,6 +13,9 @@ from business_agent.prompt.loader import load_prompt_template
 from business_agent.infrastructure.llm_client import llm_client
 from business_agent.chat_history.builder import ChatHistoryBuilder
 from business_agent.task.flows.flows import FlowList
+from business_agent.observability import brief
+
+logger = logging.getLogger(__name__)
 
 class TurnPlanner:
 
@@ -31,11 +36,29 @@ class TurnPlanner:
     prompt_inputs: dict[str, Any] = self._build_prompt_inputs(dialogue_state, flow_list=flow_list, knowledge_intents=knowledge_intents)
 
     # 2. Call LLM
+    started_at = time.perf_counter()
     llm_result = await self._invoke(prompt_inputs)
-    print('@', llm_result)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+
+    # 规范 5.3 第一档：记录意图识别结果。此前这里是裸 print——
+    # 没有级别、没有时间戳、进不了任何 handler，服务进程里只能靠盯终端
+    logger.info(
+      "turn_plan sender_id=%s track=%s detail=%s elapsed_ms=%.0f",
+      dialogue_state.sender_id, self._track_of(llm_result), brief(llm_result), elapsed_ms,
+    )
 
     # 3. Return LLM result
     return llm_result
+
+  def _track_of(self, turn_plan: TurnPlan) -> str:
+    """三选一的哪一条。单独拎出来是因为它是排查时第一个要看的字段"""
+    if turn_plan.task is not None:
+      return "task"
+    if turn_plan.knowledge is not None:
+      return "knowledge"
+    if turn_plan.chitchat is not None:
+      return "chitchat"
+    return "none"
 
   def _build_prompt_inputs(self, 
                            state: DialogueState, 

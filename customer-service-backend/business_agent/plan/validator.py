@@ -1,8 +1,13 @@
+import logging
+
 from business_agent.domain.state import DialogueState
 from business_agent.knowledge.intents import KnowledgeIntent
 from business_agent.plan.turn_plan import ClarifyReason, KnowledgeTurnPlan, TaskTurnPlan, TurnPlan, TurnPlanValidatedResult
 from business_agent.task.commands.command import CancelFlowCommand, Command, ResumeFlowCommand, SetSlotsCommand, StartFlowCommand
 from business_agent.task.flows.flows import FlowList
+
+
+logger = logging.getLogger(__name__)
 
 
 class TurnPlanValidator:
@@ -49,6 +54,9 @@ class TurnPlanValidator:
 
 
   def _reject(self, reason: ClarifyReason) -> TurnPlanValidatedResult:
+    # 规划被判非法这条路径此前一行日志都没有：规划成功记了，被拒反而静默。
+    # 而「静默失效」正是上面那类「加了新命令忘了加白名单」的错误唯一会留下的痕迹
+    logger.warning("turn_plan_rejected reason=%s", reason.value)
     return TurnPlanValidatedResult(valid=False, reason=reason)
 
   def _validate_task_track(self, 
@@ -71,6 +79,15 @@ class TurnPlanValidator:
       return self._reject(ClarifyReason.MISSING_TASK_COMMANDS)
 
     # 2. whether command is legit
+    #
+    # 这一条当前**永远不会命中**：allowed_commands 与 COMMAND_TO_CLASS 是同一批类，
+    # 合法命令必然是四者之一，非法的在 Command.from_dict 就 KeyError 炸了、到不了这里。
+    #
+    # 保留它是因为它是唯一的类型闸门。但要说清楚它**不是报警**：真有人给
+    # COMMAND_TO_CLASS 加了第五种命令却忘了加进这里，走的是
+    # reject → 澄清兜底话术 → 连续失败攒够转人工，全程不抛错。
+    # 表现是「机器人忽然变笨然后转人工」，而不是任何一处显式失败。
+    # 下面 _reject 里那行 warning 是这条路径目前唯一的信号，别删。
     allowed_commands = (StartFlowCommand, SetSlotsCommand, CancelFlowCommand, ResumeFlowCommand)
     if not all(isinstance(command, allowed_commands) for command in task.commands):
       return self._reject(ClarifyReason.INVALID_TASK_COMMANDS)

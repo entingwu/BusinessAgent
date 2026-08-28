@@ -1,3 +1,4 @@
+import logging
 from dataclasses import asdict
 
 from business_agent.domain.contexts import SystemCollectInformationContext
@@ -8,6 +9,8 @@ from business_agent.task.flows.flows import FlowList
 from business_agent.task.flows.links import FlowStepConditionLink, FlowStepFallbackLink, FlowStepStaticLink
 from business_agent.task.flows.slot_guard import accept_slots
 from business_agent.task.flows.steps import ActionFlowStep, CollectionFlowStep, EndFlowStep, FlowStep, StartFlowStep
+
+logger = logging.getLogger(__name__)
 
 
 class FlowExecutor:
@@ -170,7 +173,20 @@ class FlowExecutor:
       "slots": state.active_task.slots if state.active_task is not None else {},
     }
 
-    return eval(condition_expr, {}, data)
+    # 条件表达式来自 YAML，是配置不是代码，写错了不该让用户收到 500。
+    # 这条防线是随 product_recommendation 的 `int(slots.get('product_round'))`
+    # 一起加的——那是仓库里第一条做类型强转的条件，槽位值一旦不是数字串就 ValueError。
+    # 当前写入者只有 _next_round（只产数字串）、且槽位白名单挡着 LLM 写它，
+    # 所以触发不了；但这条依赖在 YAML 里看不见，不该靠它撑着。
+    #
+    # 求值失败按「条件不成立」处理，也就是走 else 分支。这是保守方向：
+    # 分支走错顶多是流程多绕一轮，而抛异常是整通对话直接断掉。
+    # 必须打 WARNING——静默的 False 会让写错的条件永远不被发现
+    try:
+      return bool(eval(condition_expr, {}, data))
+    except Exception as error:
+      logger.warning("flow_condition_eval_failed expr=%s error=%r", condition_expr, error)
+      return False
 
 
   def _run_end_step(self, 
