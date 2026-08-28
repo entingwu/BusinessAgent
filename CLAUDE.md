@@ -40,6 +40,15 @@ docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set
 
 There is **no version table** — nothing records which migrations have run. Every script is written to be idempotent (`UPDATE` for existing rows, `INSERT ... ON DUPLICATE KEY UPDATE` for new ones), so re-running one is safe; that is the only defence. Check the data itself to tell whether a script has been applied.
 
+**Not all migrations are equal — check whether one is a schema change before deploying code that needs it.**
+
+| Script | Kind | Skipping it means |
+| --- | --- | --- |
+| `2026-08-27-unify-product-attributes.sql` | data only | attribute filtering matches nothing; endpoints still answer |
+| `2026-08-28-stock-quantity-and-order-idempotency.sql` | **schema** | **every product and order endpoint returns 500** — the ORM selects `products.stock_quantity`, `orders.idempotency_key`, `delivery_method` and `request_fingerprint`, and MySQL raises `Unknown column` |
+
+For a schema migration the order is **migrate first, then deploy the code** — the reverse leaves the service broken until you notice. There is no automation for this: `docker-compose.yml` mounts only `init/`, and `init/` runs only on first volume creation.
+
 Two traps around this:
 
 - **Never `docker compose down -v`.** The init scripts only `USE commerce` — they have never created `custom_service`, which holds `dialogue_states` plus the RAG tables. Wiping the volume rebuilds `commerce` and destroys `custom_service` with nothing to recreate it.
@@ -171,7 +180,7 @@ These return successfully with placeholder content — they are not bugs to fix 
 - `task/action/customer/recommend_similar_products.py` — 28-line stub that replies "还没有接入正式的推荐系统".
 - **Knowledge-source priority routing (hit-and-stop) is not implemented** — it is 第二档 work (spec 3.1.2 附注, C.4.5). `KnowledgeResponder` no longer concatenates indiscriminately (it sorts by score, cuts to Top-K and to a token budget), but every provider named by the intent is still queried and their surviving chunks are merged. 第一档 relies on the 3.1.1 配置纪律 — no volatile data in the knowledge base — to keep sources from contradicting each other.
 - **The protocol is wired but nobody fills it.** `cards[]`, `suggestions[]` and `control_owner` now exist end to end (`domain/messages.py` → `api/schemas.py` → `chat_router.py` → the Vue frontend renders all three, per 附录 E). But **no producer sets them**: no action or responder ever constructs a `BotMessage` with `cards` or `suggestions`, and `ProcessedResult.control_owner` is hardcoded to `"AGENT"` — there is no handoff logic to move it to `PENDING_HUMAN` / `HUMAN`. The frontend's multi-card list and the three control-ownership states are therefore unreachable at runtime. Filling them is 第一档 work (3.3.3 商品推荐 and 3.3.4 人工接管), not a plumbing bug.
-- The e-commerce service has **no create-order endpoint** (`POST /orders`; only shipping-reminders and refund-applications are writes), and `products.stock_status` is a `VARCHAR` string rather than a quantity. Product search (`GET /products`) **now exists** — added in `e412b04`.
+- The e-commerce service **now has** `POST /orders` (idempotent, decrements stock under a row lock) and `products.stock_quantity`. `stock_status` is still a `VARCHAR`, but it is now a **derived display value** — the single place that derives it is `_stock_label()` in `app/api.py`, and every "is it in stock" judgement reads the quantity. Both columns are kept in sync only by code that goes through `create_order`; anything that writes `stock_quantity` by hand must update the label too. Applying `docker/mysql/migrations/2026-08-28-stock-quantity-and-order-idempotency.sql` is **mandatory before running this code** (see the migrations table above).
 - **The UI is English, the Agent is Chinese.** `customer-service-frontend` was localized to English, but every prompt template in `prompt/jinja2/`, the YAML flows and the knowledge content are Chinese, so `qwen-plus` replies in Chinese inside an English shell. The four welcome quick-replies now send English text (`Request a refund`, …) into a Chinese intent set — intent matching is done by the LLM rather than string comparison, so it should hold, but it is unverified.
 - One display-layer coupling worth knowing: order status values arrive from the commerce service **in Chinese** (`待发货`, `运输中`, …) and are used as lookup keys in `ORDER_STATUS_CLASS` / `ORDER_STATUS_LABEL` in `App.vue`. Translate the values, never the keys.
 

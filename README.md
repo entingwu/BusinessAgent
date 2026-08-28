@@ -61,7 +61,7 @@ docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set
   < docker/mysql/migrations/2026-08-27-unify-product-attributes.sql
 ```
 
-They are idempotent and there is no version table, so when in doubt, re-run. Rebuilding the API after a code change needs `docker compose -p ecommerce up -d --build backend` — a plain `restart` keeps serving the old image. Never use `down -v`: it destroys the `custom_service` database, which no script recreates.
+They are idempotent and there is no version table, so when in doubt, re-run. **`2026-08-28-stock-quantity-and-order-idempotency.sql` is a schema change, not just data** — the ORM depends on the columns it adds, so run it *before* starting this version of the service; skipping it makes every product and order endpoint return 500. Rebuilding the API after a code change needs `docker compose -p ecommerce up -d --build backend` — a plain `restart` keeps serving the old image. Never use `down -v`: it destroys the `custom_service` database, which no script recreates.
 
 The dialogue backend additionally needs a `custom_service` database on that same MySQL instance for its own `dialogue_states` table.
 

@@ -1,3 +1,5 @@
+import hashlib
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,7 +70,17 @@ class Action(ABC):
         缺失的必需槽位名列表；不缺则为空
     """
     slots = state.active_task.slots if state.active_task is not None else {}
-    return [spec.name for spec in cls.reads if spec.required and not slots.get(spec.name)]
+    # 用「是不是没有值」判断，而不是 falsy：数量 0、空字符串、False 都是合法的槽位值，
+    # 按 falsy 判会把它们当成没填，让流程反复追问一个用户已经回答过的问题
+    return [
+      spec.name for spec in cls.reads
+      if spec.required and cls._is_blank(slots.get(spec.name))
+    ]
+
+  @staticmethod
+  def _is_blank(value: Any) -> bool:
+    """槽位算不算「没填」：只有 None 与纯空白字符串算，0 / False 都算填了"""
+    return value is None or (isinstance(value, str) and not value.strip())
 
   @classmethod
   def idempotency_key(cls, state: DialogueState) -> str | None:
@@ -85,7 +97,16 @@ class Action(ABC):
     if not cls.is_write or not cls.idempotency_slots:
       return None
     slots = state.active_task.slots if state.active_task is not None else {}
-    values = [str(slots.get(name) or "") for name in cls.idempotency_slots]
-    if not all(values):
+    values = [slots.get(name) for name in cls.idempotency_slots]
+    if any(cls._is_blank(value) for value in values):
       return None
-    return ":".join([cls.name, *values])
+
+    # 对值取哈希而不是直接拼接，解决三件事：
+    # 1. 拼接不转义时，含冒号的槽位值会让不同组合拼出同一个键，而这层的全部意义就是唯一性；
+    # 2. 地址这类长槽位拼出来会超过中台 idempotency_key 的 64 字符上限；
+    # 3. 幂等键会进日志与错误信息，哈希顺带避免把收货地址原文带出去。
+    # 前缀保留动作名，排查时还能一眼看出这是哪个动作的键。
+    digest = hashlib.sha256(
+      "\u0000".join(str(value) for value in values).encode("utf-8")
+    ).hexdigest()[:32]
+    return f"{cls.name}:{digest}"

@@ -50,9 +50,16 @@ CREATE TABLE orders (
     receiver_name         VARCHAR(64)    NOT NULL,
     receiver_phone_masked VARCHAR(32)    NOT NULL,
     receiver_address      VARCHAR(255)   NOT NULL,
+    delivery_method       VARCHAR(32)    NOT NULL DEFAULT '标准配送',
     -- 幂等键：同一个 idempotency_key 重复下单只会产生一笔订单。
     -- 允许 NULL 是为了兼容既有订单与非幂等来源；MySQL 的唯一索引允许多个 NULL。
-    idempotency_key       VARCHAR(64)    NULL,
+    -- collation 必须是 utf8mb4_0900_bin：表默认的 utf8mb4_unicode_ci 不区分大小写、
+    -- 又是 PAD SPACE，两个真正不同的键会互相吞掉，调用方会拿到别人的订单。
+    -- 注意不能用 utf8mb4_bin——它区分大小写但**仍是 PAD SPACE**，尾空格照样撞车；
+    -- 只有 UCA 9.0 那套（_0900_）是 NO PAD。
+    idempotency_key       VARCHAR(64)    COLLATE utf8mb4_0900_bin NULL,
+    -- 请求指纹：同一个幂等键换了购物车内容时用来识别，返回 409 而不是静默给旧单
+    request_fingerprint   VARCHAR(64)    COLLATE utf8mb4_0900_bin NULL,
     UNIQUE KEY uq_orders_order_id (order_id),
     UNIQUE KEY uq_orders_idempotency_key (idempotency_key),
     KEY ix_orders_user_id (user_id),

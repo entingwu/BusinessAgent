@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -195,13 +198,34 @@ def _mask_phone(phone: str) -> str:
     return f"{digits[:3]}****{digits[-4:]}"
 
 
+def _request_fingerprint(body: CreateOrderRequest) -> str:
+    """
+    Goal: 为下单请求算一个内容指纹，用来识别「同一个幂等键换了内容」
+    只覆盖决定这笔订单是什么的字段：买了什么、买多少、寄给谁、怎么配送。
+    同一 SKU 拆多行与调换顺序会算出同一个指纹——那本来就是同一笔订单。
+    """
+    merged: dict[str, int] = {}
+    for item in body.items:
+        merged[item.product_id] = merged.get(item.product_id, 0) + item.quantity
+    payload = json.dumps(
+        {
+            "items": sorted(merged.items()),
+            "receiver_name": body.receiver_name,
+            "receiver_phone": body.receiver_phone,
+            "receiver_address": body.receiver_address,
+            "delivery_method": body.delivery_method,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _build_create_order_result(order: Order, *, replay: bool) -> CreateOrderResultData:
     """
     Goal: 把订单实体转成创建订单的返回结构。首次创建与幂等重放共用，保证两者返回完全一致
     """
-    delivery_method = "标准配送"
-    if "配送方式：" in (order.status_desc or ""):
-        delivery_method = order.status_desc.split("配送方式：", 1)[1].rstrip("。")
+    delivery_method = order.delivery_method
     return CreateOrderResultData(
         order_id=order.order_id,
         status=order.status,
@@ -524,7 +548,18 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         .filter(Order.idempotency_key == body.idempotency_key)
         .first()
     )
+    fingerprint = _request_fingerprint(body)
     if existing:
+        # 键相同但内容不同：不能静默返回旧单，那等于告诉用户「下单成功」却下的是别的东西。
+        # 报 409 让调用方换一个幂等键——购物车变了就是另一笔订单
+        if existing.request_fingerprint and existing.request_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"幂等键 {body.idempotency_key} 已用于订单 {existing.order_id}，"
+                    "但本次请求的商品或收货信息与那一笔不同。购物车变了请换一个幂等键。"
+                ),
+            )
         return _wrap(_build_create_order_result(existing, replay=True))
 
     user = _get_user_or_404(db, body.user_id)
@@ -543,6 +578,13 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         .all()
     )
     found = {product.product_id: product for product in products}
+
+    over_limit = sorted(pid for pid, qty in wanted.items() if qty > 99)
+    if over_limit:
+        raise HTTPException(
+            status_code=422,
+            detail=f"单个商品最多购买 99 件，{'、'.join(over_limit)} 超出上限。",
+        )
 
     missing = sorted(set(wanted) - set(found))
     if missing:
@@ -563,13 +605,15 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         order_id=order_id,
         user_id=user.id,
         status="待支付",
-        status_desc=f"订单已创建，等待支付。配送方式：{body.delivery_method}。",
+        status_desc="订单已创建，等待支付。",
         amount=Decimal("0.00"),
         created_at=created_at,
         receiver_name=body.receiver_name,
         receiver_phone_masked=_mask_phone(body.receiver_phone),
         receiver_address=body.receiver_address,
+        delivery_method=body.delivery_method,
         idempotency_key=body.idempotency_key,
+        request_fingerprint=fingerprint,
     )
     db.add(order)
     try:
@@ -614,6 +658,14 @@ def create_order(body: CreateOrderRequest, db: Session = Depends(get_db)):
         if winner is None:
             # 唯一冲突却查不到那笔订单，说明冲突来自别的约束，不能当幂等重放吞掉
             raise
+        if winner.request_fingerprint and winner.request_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"幂等键 {body.idempotency_key} 已用于订单 {winner.order_id}，"
+                    "但本次请求的商品或收货信息与那一笔不同。购物车变了请换一个幂等键。"
+                ),
+            )
         return _wrap(_build_create_order_result(winner, replay=True))
 
     db.refresh(order)
