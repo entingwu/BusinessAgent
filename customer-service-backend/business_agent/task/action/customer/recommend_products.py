@@ -60,17 +60,17 @@ class ActionRecommendProducts(Action):
 
     items = data.get("items") or []
     if not items:
-      return ActionResult(messages=[BotMessage(text=self._no_match_text(attrs, max_price),
-                                               suggestions=["放宽预算", "换个风格", "看全部商品"])])
+      # 不在这里挂按钮：紧跟其后的 ask_refine 步骤会出一套，
+      # 两处都挂会叠成两排。收敛选项只有一个出处
+      return ActionResult(messages=[BotMessage(text=self._no_match_text(attrs, max_price))])
 
     cards = [self._to_card(item) for item in items]
     total = data.get("total") or len(items)
+    # 不在这里挂按钮：紧跟其后的 ask_refine 步骤会出一套收敛选项，
+    # 两处都挂会叠成两排
     return ActionResult(messages=[BotMessage(
       text=self._headline(attrs, max_price, shown=len(cards), total=total),
       cards=cards,
-      # 快捷回复推进下一步（3.3.3 第 4 步）。文案刻意用用户会说的话，
-      # 这样点按钮和自己打字走的是同一条意图识别路径
-      suggestions=["看看更便宜的", "换个风格", "只看有货的", "就要这个"],
     )])
 
   def _to_card(self, item: dict[str, Any]) -> FocusedObject:
