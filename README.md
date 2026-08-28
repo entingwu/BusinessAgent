@@ -14,24 +14,33 @@ The repository holds all three services:
 
 This repository is being evolved toward the spec in [`meta-business-agent.md`](meta-business-agent.md) (Chinese) — a simplified Meta Business Agent, organised into three priority tiers. The MVP is tier one.
 
-Against the spec's 10 MVP acceptance criteria, the current state is **4 implemented / 4 stubbed / 2 not started**:
+Against the spec's 10 MVP acceptance criteria, the current state is **10 implemented / 0 stubbed / 0 not started**, verified by repeated independent audits that start the service, send real requests and check the database rather than reading the code.
 
-| Working today | Not yet |
+| | |
 | --- | --- |
-| Multi-turn slot filling; flow switch / resume / cancel | RAG knowledge base — no embedding or vector store exists yet |
-| Real-time data from the e-commerce service (orders, logistics, products) | FAQ retrieval |
-| State persistence and session recovery | Human handoff — no `PENDING_HUMAN` state, the agent never stops replying |
-| End-to-end loop for the tool-calling track | Product recommendation, card lists, quick-reply buttons |
+| Multi-turn slot filling; flow switch / resume / cancel | RAG knowledge base with per-chunk provenance |
+| Real-time data from the e-commerce service (orders, logistics, products) | Retrieval miss falls back without fabricating — **guaranteed by control flow, not by prompt wording** |
+| Product recommendation: preference collection → card list with live stock → quick replies | Human handoff: three control-owner states, the agent stops replying under `HUMAN` |
+| State persistence and session recovery across process restarts | Order creation with an idempotency key and row-locked stock decrement |
 
-**Known stubs** — these return successfully with placeholder content, so do not mistake them for runtime failures:
+**Two retrieval chains ship in this repo.** The default needs nothing beyond an API key; the second is the rebuild.
 
-- `knowledge/provider/knowledge.py` — `RagDefaultProvider` and `FaqDefaultProvider` return fixed placeholder strings (and their messages are swapped)
-- `task/action/customer/recommend_similar_products.py` — replies that recommendation is not wired up yet
-- `BotMessage.object` is never assigned anywhere in the project, so the frontend's card-rendering branch is unreachable
-- The frontend already renders `botMsg.suggestions`, but the backend has no such field — a contract gap to close on both sides at once
+| | Chroma + DashScope *(default)* | Milvus + BGE-M3 |
+| --- | --- | --- |
+| Embedding | hosted `text-embedding-v3`, dense only | local BGE-M3, dense + sparse |
+| Retrieval | cosine Top-K + threshold | hybrid search + rerank, orchestrated with LangGraph |
+| Gate | vector score | rerank relevance score |
+| Query latency | 0.68–0.85s | ~2.1s — the rerank round-trip is 94% of it |
+| Setup | none | ~2GB of dependencies, three containers, a 2.3GB model |
 
-`GET /orders/{id}/logistics` returns four trace nodes, but `lookup_logistics.py` reads only three summary fields and drops `traces`.
+Switch with one idempotent command: `bash scripts/enable_milvus_rag.sh` (`--revert` to go back). It installs dependencies, starts Milvus, creates a **separate** metadata database, rewrites `.env`, rebuilds the index, and asserts `vector_chunks == metadata_chunks` before reporting success.
 
+**Known gaps** — these are decisions, not oversights:
+
+- `knowledge/handler.py` queries every provider an intent names and merges the survivors; hit-and-stop priority routing is tier-two work. Tier one relies on the configuration discipline in spec 3.1.1 — no volatile data in the knowledge base — to keep sources from contradicting each other.
+- `Action.is_write` / `idempotency_slots` are declared and filled but **nothing consumes them yet**; the engine has no "confirm before a write" step. That is the order-flow task.
+- `PENDING_HUMAN` has no user-side exit. Only an agent calling `POST /api/handoff` `release`, or the 1-hour idle expiry, clears it.
+- The rebuilt chain runs rerank **once per provider**, so a two-provider knowledge turn spends ~4s waiting on the network. Merging both candidate sets into a single rerank call would halve it.
 
 ## Quick start
 
@@ -117,6 +126,12 @@ All backend configuration is environment-driven. [`business_agent/config/setting
 | `DATABASE_URL` | Async MySQL connection string | `mysql+aiomysql://user:pass@127.0.0.1:13306/custom_service?charset=utf8mb4` |
 | `APP_HOST` / `APP_PORT` | Listen address | `0.0.0.0` / `18082` |
 
+The knowledge stack adds another 20 keys — embedding backend and device, vector backend, chunking, Top-K, thresholds, rerank, HyDE, graph orchestration. They are all documented inline in [`.env.example`](customer-service-backend/.env.example); copy that section wholesale rather than picking keys out of it.
+
+**A missing key fails at import time, not at startup.** `settings = Settings()` runs at module scope, so `import business_agent.api.app` dies before the server binds a port and every `-m` command dies with it. It looks like broken code; it is a missing line in `.env`. The reverse also holds — pydantic-settings defaults to `extra='forbid'`, so a key the current code does not declare is equally fatal.
+
+**One key deserves singling out.** `KNOWLEDGE_DATABASE_URL` is empty by default, which means "use `DATABASE_URL`". Any branch that changes the embedding model or the vector store **must** point it at its own database: the vector index is a local gitignored directory while the chunk metadata lives in the shared MySQL, so sharing the metadata across two embedding models breaks the `vector_chunks == metadata_chunks` check for everyone else — for reasons unrelated to their own environment.
+
 **`.env` is excluded by `.gitignore` — never commit it.** When adding a new setting, update `.env.example` alongside it.
 
 ## External dependencies
@@ -126,6 +141,9 @@ All backend configuration is environment-driven. [`business_agent/config/setting
 | MySQL | Persists dialogue state in table `dialogue_states` (`sender_id` primary key + `state_json` TEXT) | `127.0.0.1:13306` |
 | E-commerce service | Order detail `/orders/{id}`, logistics `/orders/{id}/logistics`, products, per-user order lists | `127.0.0.1:18081` |
 | LLM | Turn planning, knowledge answering, chitchat, clarification wording | DashScope |
+| Embedding | Indexing and query encoding | DashScope by default; local BGE-M3 on the rebuilt chain |
+| Vector store | Chunk vectors — **a local gitignored directory, never in MySQL**, so every checkout builds its own and a fresh clone starts empty | `knowledge_store/chroma`, or Milvus on `127.0.0.1:19530` |
+| Reranker *(rebuilt chain only)* | Relevance scoring; the gate moves from vector similarity to this | DashScope `gte-rerank-v2` |
 
 Both come from [`ecommerce-service-backend/docker-compose.yml`](ecommerce-service-backend/docker-compose.yml) in this repository.
 
@@ -198,9 +216,17 @@ Seven knowledge intents are defined in [`business_agent/knowledge/intents.py`](c
 | --- | --- |
 | `product_info` | `api.product` (requires product card context) |
 | `order_info` | `api.order` (requires order card context) |
-| `refund_policy` / `return_policy` / `shipping_policy` | `faq.default` + `rag.default` *(both stubs)* |
-| `platform_rule` | `rag.default` *(stub)* |
-| `general_ecommerce_info` | `faq.default` + `rag.default` *(both stubs)* |
+| `refund_policy` / `return_policy` / `shipping_policy` | `faq.default` + `rag.default` |
+| `platform_rule` | `rag.default` |
+| `general_ecommerce_info` | `faq.default` + `rag.default` |
+
+`rag.default` and `faq.default` are the same vector-backed provider filtered on `source_type` — documents versus FAQ entries. The corpus lives in [`knowledge_source/`](customer-service-backend/knowledge_source/) and is indexed by `python -m business_agent.knowledge.ingest`.
+
+**Three paths never reach the LLM at all**: a retrieval miss, a result below the threshold, and a vector-store or embedding outage each return constant text. Fabrication is therefore impossible by control flow rather than discouraged by prompt wording — the distinction matters, because an audit can verify the former by reading one branch.
+
+Every retrieval writes to `retrieval_traces` — one row per candidate chunk per turn, recording its similarity, whether it survived Top-K and the token budget, and why it was dropped. Read a past turn back with `python -m business_agent.knowledge.ingest traces --sender-id <id>`.
+
+> The corpus is written in Chinese on purpose. The similarity threshold was calibrated against it, and the local BGE-M3 backend retrieves it correctly from English questions — `Who pays the return shipping fee?` matches the Chinese FAQ entry. Translating the corpus would invalidate the threshold and buy nothing.
 
 ## Project layout
 
