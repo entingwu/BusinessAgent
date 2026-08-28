@@ -50,7 +50,16 @@ class Settings(BaseSettings):
   knowledge_chunk_size: int             # chunk size in estimated tokens; spec default 500-800
   knowledge_chunk_overlap: int          # overlap in estimated tokens; spec default 80-150
   knowledge_top_k: int                  # retrieval Top-K
-  knowledge_score_threshold: float      # cosine similarity threshold; below it counts as a miss
+  knowledge_score_threshold: float      # cosine threshold; below it counts as a miss (used when rerank is off)
+
+  # Reranking. When enabled the gate moves from the vector score to the rerank score — they mean
+  # different things: vector similarity is "how alike", rerank is "can this answer the question".
+  # Measured on this corpus the vector hit/miss ranges overlap completely while the rerank ranges
+  # are cleanly separated, and the rerank scale holds across languages.
+  rerank_enabled: bool
+  rerank_model: str                     # DashScope gte-rerank-v2
+  rerank_candidates: int                # how many candidates go into reranking; recall must be wider than Top-K
+  rerank_score_min: float               # if even the top candidate scores below this, it is a miss
   knowledge_context_max_tokens: int     # cap on the total length of chunks put into the prompt
 
   knowledge_log_level: str              # log level for the knowledge package; retrieval traces depend on it

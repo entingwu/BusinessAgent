@@ -12,6 +12,7 @@ from business_agent.chat_history.builder import ChatHistoryBuilder
 from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
 from business_agent.infrastructure.embedding import EmbeddingUnavailableError, get_embedding_backend
+from business_agent.infrastructure.reranker import RerankUnavailableError, cliff_cutoff, rerank
 from business_agent.infrastructure.vector_client import (
   ChromaVectorClient,
   VectorMatch,
@@ -35,6 +36,7 @@ class KnowledgeRetriever:
     self._vector_client = vector_client or get_vector_client()
     self._top_k = top_k if top_k is not None else settings.knowledge_top_k
     self._score_threshold = score_threshold if score_threshold is not None else settings.knowledge_score_threshold
+    self._rerank_enabled = settings.rerank_enabled
 
   async def retrieve(self,
                      query_text: str,
@@ -68,9 +70,12 @@ class KnowledgeRetriever:
       embedded = await get_embedding_backend().embed_query(query_text)
       # sparse 只有 bge_m3 后端产出；给了就走混合检索，没给就退化为纯 dense。
       # 这一句是 dense-only 与 hybrid 两条路唯一的分叉点。
+      # 开了 rerank 就把召回加宽：向量检索负责「捞得全」，rerank 负责「排得准」。
+      # 只捞 Top-K 再重排等于让向量分决定了候选集，rerank 只能在它的错误里挑。
+      recall_k = settings.rerank_candidates if self._rerank_enabled else effective_top_k
       matches: list[VectorMatch] = await self._vector_client.query(
         vector=embedded.dense[0],
-        top_k=effective_top_k,
+        top_k=recall_k,
         filters=filters,
         sparse_vector=embedded.sparse[0] if embedded.has_sparse else None,
       )
@@ -78,22 +83,49 @@ class KnowledgeRetriever:
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
       raise KnowledgeUnavailableError(str(error)) from error
 
-    chunks = [_to_chunk(match, provider_id) for match in matches if match.score >= effective_threshold]
+    scoring = "vector"
+    if self._rerank_enabled and matches:
+      try:
+        # 重排：分数语义从「像不像」换成「能不能回答」。实测两者在表面句式相似时
+        # 会分道扬镳——「支持货到付款吗」的向量分 0.79（像强命中），rerank 0.17。
+        rerank_scores = await rerank(query_text, [match.document for match in matches])
+        ranked = sorted(zip(matches, rerank_scores), key=lambda pair: pair[1], reverse=True)
+        keep = cliff_cutoff(
+          [score for _, score in ranked],
+          score_min=settings.rerank_score_min,
+          max_top_k=effective_top_k,
+        )
+        matches = [match for match, _ in ranked[:keep]]
+        # 把 rerank 分写回 match.score：下游的阈值判定、溯源落库、日志用的都是它，
+        # 换算在这里一次完成，不让两套分数语义同时存在于下游。
+        for match, (_, score) in zip(matches, ranked[:keep]):
+          match.score = score
+        rejected_pairs = [(match, score) for match, score in ranked[keep:]]
+        scoring = "rerank"
+      except RerankUnavailableError as error:
+        # 重排是提升精度的环节，它挂了不该让用户拿不到答案——退回向量分与向量阈值。
+        # 这条降级与「向量库不可用」不同：那个必须兜底转人工，这个可以继续。
+        logger.warning("rerank_unavailable falling back to vector score: %s", error)
+        matches = [match for match in matches if match.score >= effective_threshold][:effective_top_k]
+        rejected_pairs = []
+    else:
+      rejected_pairs = [(match, match.score) for match in matches if match.score < effective_threshold]
+      matches = [match for match in matches if match.score >= effective_threshold][:effective_top_k]
+
+    chunks = [_to_chunk(match, provider_id) for match in matches]
     chunks.sort(key=lambda chunk: chunk.score or 0.0, reverse=True)
 
     # Candidates rejected by the threshold go into the log too: on a miss, "how far short of the
     # threshold was it?" is the single most useful number when tuning. These do not reach the
     # retrieval_traces table (which only records chunks that made it to the responder), so the
     # log is their only home.
-    rejected = [
-      {"chunk_id": match.id, "score": round(match.score, 4)}
-      for match in matches if match.score < effective_threshold
-    ]
+    rejected = [{"chunk_id": match.id, "score": round(score, 4)} for match, score in rejected_pairs[:5]]
 
     # Record hit chunk ids and similarities internally so answers stay traceable (spec 5.2 / 5.3)
     logger.info(
-      "knowledge_retrieval query=%r filters=%s top_k=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
-      query_text, filters, effective_top_k, effective_threshold,
+      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
+      query_text, filters, effective_top_k, scoring,
+      settings.rerank_score_min if scoring == "rerank" else effective_threshold,
       len(chunks), len(rejected),
       [chunk.trace() for chunk in chunks],
       rejected,
