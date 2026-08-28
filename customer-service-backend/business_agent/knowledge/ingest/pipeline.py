@@ -12,7 +12,7 @@ from typing import Any
 
 from business_agent.config.settings import settings
 from business_agent.infrastructure import db_client
-from business_agent.infrastructure.llm_client import embed_documents, embedding_model_name
+from business_agent.infrastructure.embedding import get_embedding_backend
 from business_agent.infrastructure.vector_client import ChromaVectorClient, VectorRecord, get_vector_client
 from business_agent.knowledge.ingest.loader import LoadedSource, discover_files, load_source
 from business_agent.knowledge.ingest.splitter import PreparedChunk, embedding_text, split_source
@@ -78,7 +78,7 @@ class IngestPipeline:
         force: re-split and re-embed even when the content has not changed
     Returns: IngestReport
     """
-    report = IngestReport(embedding_model=embedding_model_name())
+    report = IngestReport(embedding_model=get_embedding_backend().name)
 
     for file_path in discover_files(self._source_dir):
       source = load_source(self._source_dir, file_path)
@@ -141,8 +141,14 @@ class IngestPipeline:
       await repository.replace_chunks(source.source_id, [])
       return 0
 
-    model_name = embedding_model_name()
-    vectors = await embed_documents([embedding_text(chunk) for chunk in chunks])
+    backend = get_embedding_backend()
+    model_name = backend.name
+    result = await backend.embed_documents([embedding_text(chunk) for chunk in chunks])
+
+    # sparse 只有 bge_m3 后端产出；dashscope 后端下 result.sparse 为空列表，
+    # 这里给 None，向量库那边按「没有稀疏向量」处理（Chroma 本就忽略，
+    # Milvus 会写入空稀疏向量，该条只能被 dense 那一路命中）。
+    sparse_rows = result.sparse if result.has_sparse else [None] * len(chunks)
 
     records = [
       VectorRecord(
@@ -150,8 +156,9 @@ class IngestPipeline:
         vector=vector,
         document=chunk.content,
         metadata=chunk.metadata(model_name),
+        sparse=sparse,
       )
-      for chunk, vector in zip(chunks, vectors)
+      for chunk, vector, sparse in zip(chunks, result.dense, sparse_rows)
     ]
 
     # Update semantics: delete this source's old chunks first, then write the new ones, so the

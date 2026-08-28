@@ -11,7 +11,7 @@ import logging
 from business_agent.chat_history.builder import ChatHistoryBuilder
 from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
-from business_agent.infrastructure.llm_client import EmbeddingUnavailableError, embed_query
+from business_agent.infrastructure.embedding import EmbeddingUnavailableError, get_embedding_backend
 from business_agent.infrastructure.vector_client import (
   ChromaVectorClient,
   VectorMatch,
@@ -65,11 +65,14 @@ class KnowledgeRetriever:
     filters = {"source_type": list(source_types)} if source_types else None
 
     try:
-      vector = await embed_query(query_text)
+      embedded = await get_embedding_backend().embed_query(query_text)
+      # sparse 只有 bge_m3 后端产出；给了就走混合检索，没给就退化为纯 dense。
+      # 这一句是 dense-only 与 hybrid 两条路唯一的分叉点。
       matches: list[VectorMatch] = await self._vector_client.query(
-        vector=vector,
+        vector=embedded.dense[0],
         top_k=effective_top_k,
         filters=filters,
+        sparse_vector=embedded.sparse[0] if embedded.has_sparse else None,
       )
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)

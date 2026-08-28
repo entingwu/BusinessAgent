@@ -32,6 +32,9 @@ class VectorRecord:
   vector: list[float]
   document: str
   metadata: dict[str, Any] = field(default_factory=dict)
+  # 稀疏向量 {token_id: weight}，仅 bge_m3 后端产出。Chroma 不支持稀疏检索，
+  # 它会忽略这个字段；Milvus 用它做混合检索的第二路。
+  sparse: dict[int, float] | None = None
 
 
 @dataclass(slots=True)
@@ -151,7 +154,8 @@ class ChromaVectorClient:
   async def query(self,
                   vector: list[float],
                   top_k: int,
-                  filters: dict[str, Any] | None = None) -> list[VectorMatch]:
+                  filters: dict[str, Any] | None = None,
+                  sparse_vector: dict[int, float] | None = None) -> list[VectorMatch]:
     """
     Goal: retrieve Top-K by cosine similarity, with optional metadata filtering
     Args:
@@ -252,15 +256,32 @@ def _to_matches(raw: dict[str, Any]) -> list[VectorMatch]:
 _vector_client: ChromaVectorClient | None = None
 
 
-def get_vector_client() -> ChromaVectorClient:
+def get_vector_client():
   """
-  Goal: a per-process singleton. Only one Chroma PersistentClient should ever be open on a
-        given directory.
-  Returns: ChromaVectorClient
+  Goal: pick the vector store backend named by VECTOR_BACKEND (per-process singleton).
+
+        chroma  dense only; the first implementation, kept as the fallback and as the
+                A/B baseline for the rebuild
+        milvus  dense + sparse hybrid retrieval
+
+        Both backends share VectorRecord / VectorMatch, so nothing above knowledge/ is aware
+        of which one is in use. Only one Chroma PersistentClient should ever be open on a given
+        directory, and re-opening a Milvus connection per call is pointless — hence the singleton.
+  Returns: ChromaVectorClient | MilvusVectorClient
   """
   global _vector_client
-  if _vector_client is None:
+  if _vector_client is not None:
+    return _vector_client
+  backend = settings.vector_backend
+  if backend == "chroma":
     _vector_client = ChromaVectorClient()
+  elif backend == "milvus":
+    # 延迟导入：用 chroma 的环境不必装 pymilvus
+    from business_agent.infrastructure.milvus_client import MilvusVectorClient
+    _vector_client = MilvusVectorClient()
+  else:
+    raise VectorStoreUnavailableError(
+      f"未知的 VECTOR_BACKEND={backend!r}，可选：chroma、milvus")
   return _vector_client
 
 

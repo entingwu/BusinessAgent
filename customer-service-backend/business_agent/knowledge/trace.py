@@ -24,7 +24,7 @@ from typing import Any, Iterable
 from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
 from business_agent.infrastructure import db_client
-from business_agent.infrastructure.llm_client import embedding_model_name
+from business_agent.infrastructure.embedding import get_embedding_backend
 from business_agent.knowledge.provider.provider import KnowledgeChunk
 from business_agent.repository.knowledge_repository import KnowledgeRepository, ensure_tables
 
@@ -116,7 +116,7 @@ class KnowledgeTraceRecorder:
       "message_id": getattr(user_message, "message_id", "") or "",
       "outcome": outcome,
       "threshold": settings.knowledge_score_threshold,
-      "embedding_model": embedding_model_name(),
+      "embedding_model": get_embedding_backend().name,
     }
 
     rows: list[dict[str, Any]] = []

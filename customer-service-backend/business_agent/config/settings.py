@@ -40,8 +40,11 @@ class Settings(BaseSettings):
   embedding_dimensions: int             # 1024; changing models forces a full reindex
   embedding_batch_size: int             # the DashScope-compatible API accepts at most 10 per call
 
+  # Vector store backend: chroma (dense only, the fallback) | milvus (dense + sparse hybrid)
+  vector_backend: str
+  milvus_uri: str                       # milvus backend only, e.g. http://127.0.0.1:19530
   vector_store_dir: str                 # Chroma persistence directory (relative paths resolve against PROJECT_DIR)
-  vector_collection_name: str           # Chroma collection name
+  vector_collection_name: str           # collection name (Chroma collection / Milvus collection)
 
   knowledge_source_dir: str             # knowledge source directory (relative paths resolve against PROJECT_DIR)
   knowledge_chunk_size: int             # chunk size in estimated tokens; spec default 500-800

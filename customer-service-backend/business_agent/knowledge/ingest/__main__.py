@@ -71,7 +71,11 @@ async def _cmd_stats(_args) -> None:
   print(json.dumps({
     "embedding_model": settings.embedding_model,
     "embedding_dimensions": settings.embedding_dimensions,
-    "vector_store_dir": str(settings.resolved_vector_store_dir()),
+    "vector_backend": settings.vector_backend,
+    # 存储位置随后端而异：chroma 是本地目录，milvus 是服务地址。
+    # 无条件打印 Chroma 目录会让人以为用的是 Chroma。
+    "vector_store": (str(settings.resolved_vector_store_dir())
+                     if settings.vector_backend == "chroma" else settings.milvus_uri),
     "collection": settings.vector_collection_name,
     "vector_chunks": vector_count,
     "metadata_chunks": metadata_count,
