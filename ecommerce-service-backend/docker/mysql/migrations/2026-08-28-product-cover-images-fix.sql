@@ -10,6 +10,7 @@
 -- five of twenty-four came back wrong.
 --
 -- Commons files are named for their content, so the filename is evidence:
+--   p2004  Laptop with external screen 2026 jeh.jpg
 --   p2007  A black wireless computer mouse.jpg
 --   p2012  Computer Screen Monitor.jpg
 --   p2019  Sports T-Shirt.png
@@ -44,3 +45,7 @@ UPDATE products SET cover_url = 'https://upload.wikimedia.org/wikipedia/commons/
 -- Aroma Diffuser.jpg
 UPDATE products SET cover_url = 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Aroma_Diffuser.jpg/500px-Aroma_Diffuser.jpg' WHERE product_id = 'p2024';
 
+-- Laptop with external screen 2026 jeh.jpg
+-- Category-correct (a screen attached to a laptop) but not verifiably a *portable* one;
+-- Commons has no photo of a portable monitor. Same compromise as p2012.
+UPDATE products SET cover_url = 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Laptop_with_external_screen_2026_jeh.jpg/500px-Laptop_with_external_screen_2026_jeh.jpg' WHERE product_id = 'p2004';

@@ -64,8 +64,9 @@ async def search_products(*,
     name is allowed to 400 so the caller sees it in the log.
 
     Args:
-        attrs: attribute filters, e.g. {"use_case": "办公", "style": "极简"}
-            (the values stay in Chinese — they are matching keys against the commerce catalogue)
+        attrs: attribute filters, e.g. {"use_case": "office", "style": "minimalist"}.
+            The values are matching keys against the commerce catalogue, kept in step by the
+            four-way lockstep documented on STYLE_VALUES in recommend_products.py
     Returns:
         the data section of the commerce response (items / total / has_more); None if the
         request failed

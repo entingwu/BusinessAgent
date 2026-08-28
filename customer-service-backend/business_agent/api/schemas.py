@@ -25,9 +25,9 @@ class ChatSuggestion(BaseModel):
   One quick-reply button. `label` is what the user sees; `value` is what is sent back when they
   tap it.
 
-  The two differ where a button's text doubles as a matching key — a button reading "Office" has
-  to send 办公, because that is what the commerce catalogue stores and what the attribute filter
-  compares against. See Suggestion in domain/messages.py for the full reasoning.
+  The two differ whenever the tap has to carry something the user should not have to read — a
+  button saying "Track this order" that sends the order id along with it. See Suggestion in
+  domain/messages.py.
   """
   label: str
   value: str

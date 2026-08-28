@@ -52,17 +52,28 @@ slots:
     # 一旦哪个流程重新收集它，这条约束立即生效，不必再踩一遍同样的坑。
     pattern: "(?i)p\\d{3,}"
 
-  # 下面三个偏好槽位的**可选值刻意保留中文**，不随本次英语化一起翻译。
-  # 它们不是给人看的文案，而是直接送去中台做属性过滤的**匹配键**：
-  # 中台 24 件商品的 attributes_json 里存的就是 "use_case": "办公"、"style": "极简"。
-  # 只翻这里而不同步中台种子数据，检索会返回空列表——而空列表和「确实没有匹配
-  # 商品」在界面上完全一样，失败是静默的。
-  # 要英语化这批值，必须同时改四处独立事实：中台迁移脚本、这里、
-  # recommend_products.py 的 STYLE_VALUES、以及中台的属性白名单。那是单独一档的活。
+  # 下面三个偏好槽位的可选值是**匹配键**，不是给人看的文案：它们被原样填进槽位、
+  # 再送去中台做属性过滤，必须和中台 attributes_json 里存的一模一样。
+  #
+  # 产出同一批值的地方有四处，任何改动必须同一个提交里改完：
+  #   1. 2026-08-28-englishify-attribute-values.sql   中台存什么
+  #   2. recommend_products.py 的 STYLE_VALUES         收敛按钮
+  #   3. 这里的 description                            规划器看的允许清单
+  #   4. collect 步骤的快捷回复 value                   点击回传的内容
+  # 漏掉任何一处，点按钮返回空列表，而空列表和「确实没有匹配商品」在界面上完全
+  # 一样，失败是静默的。检索开始大面积返回空时，第一个该查的就是这四处。
+  #
+  # （注意**不含**中台的属性白名单 _FILTERABLE_ATTR_KEYS：那一份只管属性*名*，
+  # 从来不含值。早先的注释把它列为第四处，是错的。）
+  #
+  # 中台的匹配是 LOWER() + LIKE '%value%'，大小写不敏感且是子串匹配——所以
+  # 值取小写只是惯例而非必需，但**子串这一点有真实后果**：size 的 small 含 'm'、
+  # standard 含 's'，会和服饰的 S/M/L 互相命中。见 recommend_products.py 里
+  # product_size 那段。
   product_use_case:
     type: text
     label: use case
-    description: "What the product will be used for. Allowed values (keep as-is, they are matched against the commerce catalogue): 办公、游戏、差旅、居家、健身、通勤"
+    description: "What the product will be used for. Allowed values (these are matched against the commerce catalogue -- see 2026-08-28-englishify-attribute-values.sql): office, gaming, travel, home, sports"
   product_budget:
     type: text
     label: budget cap
@@ -70,7 +81,7 @@ slots:
   product_style:
     type: text
     label: style preference
-    description: "Product style. Allowed values (keep as-is, they are matched against the commerce catalogue): 极简、商务、电竞、北欧、运动"
+    description: "Product style. Allowed values (these are matched against the commerce catalogue -- see 2026-08-28-englishify-attribute-values.sql): minimalist, business, esports, nordic, sports, retro"
 
   refund_reason:
     type: text
@@ -203,25 +214,31 @@ flows:
       # 三个收集步骤都挂了快捷回复：用户点一下就把值填回来，
       # 不必自己敲。这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式。
       #
-      # use_case 与 style 两组按钮写成 {label, value}：label 是用户看到的英文，
-      # value 是点击后回传给规划器的中文。两者必须能分开，因为按钮文案就是回传的
-      # 用户输入——规划器把它原样填进槽位，槽位值再直接送去中台做属性过滤，
-      # 而中台 24 件商品存的是 "use_case": "办公"、"style": "极简"。
-      # 显示英文就意味着回传英文，检索必然返回空列表，而空列表与「确实没有匹配
-      # 商品」在界面上无法区分，失败是静默的。
+      # 三个收集步骤都挂了快捷回复：用户点一下就把值填回来，不必自己敲。
+      # 这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式。
       #
-      # 预算那组仍是裸字符串：_parse_budget 只抽数字、不做字符串匹配，label 与
-      # value 本来就该相同。裸字符串会被 Suggestion.coerce 当成 label == value。
+      # 按钮文案就是点击后回传给规划器的用户输入，规划器把它原样填进槽位，
+      # 槽位值再直接送去中台做属性过滤——所以这些值是**匹配键**，必须和
+      # 中台 attributes_json 里存的一模一样。四处同步改，见
+      # 2026-08-28-englishify-attribute-values.sql 头部注释。
+      #
+      # 写成 {label, value}：value 是小写的匹配键（中台存的就是 "office"），
+      # label 是首字母大写的显示文案。两者必须能分开——匹配键用小写是惯例，
+      # 而按钮上显示 "office" 是不该出现的粗糙。
+      #
+      # D3 之前这个分离承载的是「显示 Office、回传 办公」；D3 把中台的值翻成
+      # 英文之后那个理由消失了，但**分离本身仍然有用**，只是用途从跨语言变成
+      # 了大小写。预算那组仍是裸字符串，Suggestion.coerce 当成 label == value。
       - id: ask_use_case
         type: collect
         slot_name: product_use_case
         response:
           text: "Happy to help you pick. What will you mainly use it for?"
           suggestions:
-            - { label: "Office", value: "办公" }
-            - { label: "Gaming", value: "游戏" }
-            - { label: "Travel", value: "差旅" }
-            - { label: "Home", value: "居家" }
+            - { label: "Office",  value: "office" }
+            - { label: "Gaming",  value: "gaming" }
+            - { label: "Travel",  value: "travel" }
+            - { label: "Home",    value: "home" }
         next: ask_budget
 
       - id: ask_budget
@@ -238,10 +255,10 @@ flows:
         response:
           text: "Any style you prefer?"
           suggestions:
-            - { label: "Minimalist", value: "极简" }
-            - { label: "Business", value: "商务" }
-            - { label: "Esports", value: "电竞" }
-            - { label: "Nordic", value: "北欧" }
+            - { label: "Minimalist", value: "minimalist" }
+            - { label: "Business",   value: "business" }
+            - { label: "Esports",    value: "esports" }
+            - { label: "Nordic",     value: "nordic" }
         next: recommend
 
       - id: recommend
@@ -252,11 +269,11 @@ flows:
       # 收敛回路（规范 3.3.3 第 4 步）。用 action_listen 停在原地等下一句，
       # 而不是走 end——流程一旦 end，用户再说什么都得从头收集偏好。
       #
-      # 关键在于快捷回复给的是**值**（「商务」「300 以内」）而不是维度名
-      # （「换个风格」「放宽预算」）。上一次失败就在这里：文案里出现「预算」
-      # 「用途」这类维度名，规划器会把整句当成在填那个槽位，收敛槽位永远为空。
-      # 给值则相反——规划器把「商务」填进 product_style 正是它该做的事，
-      # 顺着它走而不是跟它打架。
+      # 关键在于快捷回复给的是**值**（"business"、"Under 300"）而不是维度名
+      # （"Change style"、"Raise budget"）。上一次失败就在这里：文案里出现
+      # 「预算」「用途」这类维度名，规划器会把整句当成在填那个槽位，收敛槽位
+      # 永远为空。给值则相反——规划器把 "business" 填进 product_style 正是它
+      # 该做的事，顺着它走而不是跟它打架。
       - id: wait_more
         type: action
         action: action_listen

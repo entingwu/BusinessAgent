@@ -56,47 +56,21 @@ STOCK_STATUS_LABELS: dict[str, str] = {
   "有库存": "In stock",
 }
 
-# Display labels for the attribute *values* used as filters.
-#
-# The values themselves stay Chinese everywhere they function as keys — in STYLE_VALUES below, in
-# the slot descriptions in user_flows.yml, in the quick-reply buttons, and in the commerce
-# catalogue — because they are written verbatim into product_style / product_use_case and sent on
-# as an attribute filter. Translate one side without the other and every search returns nothing,
-# which looks exactly like "there really is no matching product".
-#
-# But those same values also end up inside a sentence shown to the user ("Here is what I found
-# for use case 办公"), and there the Chinese is just a blemish. So they are mapped at the point of
-# display only, the same trick as STOCK_STATUS_LABELS above: the stored and transmitted value
-# never moves, so nothing that matches on it can break.
-#
-# An unmapped value falls through unchanged rather than being dropped — a new catalogue value
-# should look untranslated, not invisible.
-ATTRIBUTE_VALUE_LABELS: dict[str, str] = {
-  # use_case
-  "办公": "office", "差旅": "travel", "居家": "home", "游戏": "gaming",
-  "运动": "sports", "通勤": "commuting", "健身": "fitness",
-  # style
-  "极简": "minimalist", "商务": "business", "北欧": "Nordic",
-  "电竞": "esports", "复古": "retro",
-  # size
-  "标准": "standard", "大号": "large", "小号": "small",
-}
-
-
 # Candidate values for the refinement buttons. They offer values, never dimension names — see
 # the comment on wait_more in user_flows.yml. The values come from the allowed list in each
 # slot's description, which the planner recognises.
 #
-# STYLE_VALUES is **deliberately kept in Chinese** and was not englishified with the UI: these
-# values are written verbatim into the product_style slot and then sent to the commerce service
-# as an attribute filter, and what the commerce service stores is "style": "极简".
-# Translating them here without changing the commerce seed data guarantees an empty result on
-# click — and an empty result is indistinguishable from "there really is no matching product",
-# so the failure is silent. Changing them means changing four independent facts at once, which is
-# its own piece of work.
-# BUDGET_VALUES can be translated, because _parse_budget only extracts digits and never matches
-# strings.
-STYLE_VALUES = ("极简", "商务", "电竞", "北欧")
+# STYLE_VALUES holds **matching keys**, not display text. Each value is written verbatim into the
+# product_style slot and sent on to the commerce service as an attribute filter, so it has to be
+# byte-identical to what the catalogue stores. Three other places produce the same set and must
+# change with it, in one commit:
+#   - 2026-08-28-englishify-attribute-values.sql   (what the catalogue stores)
+#   - user_flows.yml slot descriptions              (the allowed list the planner sees)
+#   - user_flows.yml collect-step quick replies     (what a tap sends back)
+# Drift in any one of them returns an empty result set on click, which looks exactly like "there
+# really is no matching product". That is the first thing to check if searches start coming back
+# empty.
+STYLE_VALUES = ("minimalist", "business", "esports", "nordic")
 BUDGET_VALUES = ("Under 300", "Under 500", "Under 1000")
 
 
@@ -174,6 +148,11 @@ class ActionRecommendProducts(Action):
 
     items = data.get("items") or []
     if not items:
+      # An empty result set has two very different causes that look identical in the UI: the
+      # catalogue genuinely has no match, or the filter values drifted out of step with what the
+      # catalogue stores (see the four-way lockstep note on STYLE_VALUES). Logging the attrs
+      # actually sent is what makes the second case attributable instead of a guess.
+      logger.info("recommend_products empty_result attrs=%s max_price=%s", attrs, max_price)
       # An empty result needs a way out more than a full one does: with no buttons, the user is
       # left to work out how to change the criteria on their own
       return ActionResult(
@@ -211,8 +190,7 @@ class ActionRecommendProducts(Action):
     changes nothing, which is exactly why these buttons were previously judged dead.
     """
     current_style = str(slots.get("product_style") or "")
-    # label is the English name, value is what the planner must receive — see ATTRIBUTE_VALUE_LABELS
-    suggestions = [Suggestion(label=ATTRIBUTE_VALUE_LABELS.get(style, style).capitalize(), value=style)
+    suggestions = [Suggestion(label=style.capitalize(), value=style)
                    for style in STYLE_VALUES if style != current_style][:2]
 
     current_budget = str(slots.get("product_budget") or "")
@@ -286,8 +264,7 @@ class ActionRecommendProducts(Action):
 
   def _condition_text(self, attrs: dict[str, str], max_price: float | None) -> str:
     labels = {"use_case": "use case", "style": "style", "size": "size"}
-    parts = [f"{labels.get(key, key)} {ATTRIBUTE_VALUE_LABELS.get(value, value)}"
-             for key, value in attrs.items()]
+    parts = [f"{labels.get(key, key)} {value}" for key, value in attrs.items()]
     if max_price is not None:
       parts.append(f"under {max_price:.0f}")
     return "for " + ", ".join(parts) if parts else "matching your request"

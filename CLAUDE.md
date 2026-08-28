@@ -38,7 +38,15 @@ docker exec -i ecommerce-mysql mysql -uroot -proot123456 --default-character-set
   < docker/mysql/migrations/2026-08-27-unify-product-attributes.sql
 ```
 
-There is **no version table** — nothing records which migrations have run. Every script is written to be idempotent (`UPDATE` for existing rows, `INSERT ... ON DUPLICATE KEY UPDATE` for new ones), so re-running one is safe; that is the only defence. Check the data itself to tell whether a script has been applied.
+There is **no version table** — nothing records which migrations have run. Every script is written to be idempotent (`UPDATE` for existing rows, `INSERT ... ON DUPLICATE KEY UPDATE` for new ones), so re-running one is safe on its own; that is the only defence. Check the data itself to tell whether a script has been applied.
+
+**"Idempotent on its own" is not the same as "safe in any order", and one pair here proves it.** `2026-08-27-unify-product-attributes.sql` rewrites `products.title`, `description` and `attributes_json` back to their original Chinese values unconditionally. Re-running it — which the paragraph above actively encourages — silently reverts all three of `2026-08-28-englishify-display-fields.sql`, `2026-08-28-englishify-attribute-values.sql` and the two cover-image scripts. Nothing errors and nothing is logged; the catalogue simply turns back into Chinese with the old placeholder photos.
+
+The repair is to re-run the three 2026-08-28 scripts, in that order, and they are written so that always works: every one of them keys on `product_id` alone rather than on the value being replaced. **If you re-run the 2026-08-27 script, re-run those three after it.**
+
+The same applies to a **fresh volume**, and this is the case most likely to catch someone out. `docker/mysql/init/02-seed.sql` writes the original Chinese values, so a newly initialised database starts out disagreeing with the code, which now sends `office` / `minimalist` / `standard` as attribute filters. Nothing errors — product search simply returns nothing, for every query, and that is indistinguishable from an empty catalogue. Apply `2026-08-27-unify-product-attributes.sql` and then the three 2026-08-28 scripts before deciding anything is broken.
+
+One consequence worth knowing separately: `02-seed.sql` states that the two size scales do not interoperate — that `size:大号` cannot match apparel and `size:M` cannot match hardware. That was true while the scales were Han characters and Latin letters. After englishification the commerce filter's `LOWER(...) LIKE '%value%'` makes `small` contain "m", `standard` contain "s" and `large` contain "l", so the scales now bleed into each other. No flow collects `product_size` today, so nothing reaches it — but that comment is now wrong, and whoever wires the slot up will read it.
 
 **Not all migrations are equal — check whether one is a schema change before deploying code that needs it.**
 
@@ -54,7 +62,7 @@ For a schema migration the order is **migrate first, then deploy the code** — 
 Two traps around this:
 
 - **Never `docker compose down -v`.** The init scripts only `USE commerce` — they have never created `custom_service`, which holds `dialogue_states` plus the RAG tables. Wiping the volume rebuilds `commerce` and destroys `custom_service` with nothing to recreate it.
-- **`docker compose restart backend` loads the old code.** `Dockerfile.local` is `COPY . .` with no bind mount, so code changes need `docker compose -p ecommerce up -d --build backend`. This fails quietly in a nasty way: FastAPI silently ignores query parameters it does not declare, so an old image answers `GET /products?attr=use_case:办公` with `200` and **every** product rather than an error — the filter looks like it worked.
+- **`docker compose restart backend` loads the old code.** `Dockerfile.local` is `COPY . .` with no bind mount, so code changes need `docker compose -p ecommerce up -d --build backend`. This fails quietly in a nasty way: FastAPI silently ignores query parameters it does not declare, so an old image answers `GET /products?attr=use_case:office` with `200` and **every** product rather than an error — the filter looks like it worked.
 
 ```bash
 # customer-service-backend/
@@ -236,14 +244,16 @@ the migration is done, so it needs no version column and no cleanup.
 - **Python uses 2-space indentation**, not 4. Match it.
 - Docstrings follow a `Goal:` / `Args:` / `Returns:` convention.
 - **Comments and docstrings are English.** They used to be mixed Chinese and English with the rule "match the surrounding block"; that rule is gone, and writing new Chinese comments re-opens the mix. The migration is tracked as tier A of the englishification work — until it finishes you will still meet Chinese comments in untouched files, so translate the ones you edit rather than matching them.
-- **Some Chinese is load-bearing and must not be translated.** Three columns and one constant are matching keys, not display text:
+- **Two columns are load-bearing Chinese and must not be translated.** They are matching keys, not display text:
   - `products.stock_status` (`有货` / `缺货`) — the stock decrement writes `_IN_STOCK_LABEL = "有货"` back on every order, and `2026-08-28-stock-quantity-and-order-idempotency.sql` carries an unconditional `UPDATE ... SET stock_status = IF(...)`.
   - `orders.status` (`待发货`, `运输中`, …) — `app/api.py` gates the shipping-reminder endpoint on `order.status not in {"待发货", "待揽收"}`. Translate the column and that endpoint returns 400 for **every** order, without raising anything.
-  - product attribute values (`办公`, `极简`, …) in `flow_config/user_flows.yml`, `STYLE_VALUES` in `recommend_products.py`, and the quick-reply buttons — a button's label *is* the text sent back to the planner, which writes it verbatim into the slot and on to the commerce attribute filter.
+  Both are englishified **at display time instead**: `ORDER_STATUS_LABEL` in `App.vue` and `STOCK_STATUS_LABELS` in `recommend_products.py`. The stored value never moves, so everything that matches on it keeps working, including any matching site nobody grepped for.
 
-  All of these are englishified **at display time instead**: `ORDER_STATUS_LABEL` in `App.vue`, `STOCK_STATUS_LABELS` / `ATTRIBUTE_VALUE_LABELS` in `recommend_products.py`, and — for the buttons — the `label` half of `Suggestion`. The stored value never moves, so everything that matches on it keeps working, including any matching site nobody grepped for.
+- **Product attribute values are English and are matching keys** (`office`, `minimalist`, `standard`). Four places produce that same set and must change together, in one commit — `2026-08-28-englishify-attribute-values.sql` (what the catalogue stores), `STYLE_VALUES` in `recommend_products.py`, the slot descriptions in `user_flows.yml`, and that file's collect-step quick replies. Drift in any one of them makes a tap return an empty result set, which is indistinguishable from "there really is no matching product". **If searches start coming back empty, check those four first**; `recommend_products` logs `empty_result attrs=…` to make that attributable.
 
-- **Quick replies are `{label, value}`, not strings** (`Suggestion` in `domain/messages.py`). `label` is displayed; `value` is what gets sent when the button is tapped, and a button's text *is* the message the planner receives. A button reading "Office" must send `办公`, or the attribute filter matches nothing. A bare string still works everywhere and means `label == value` — `Suggestion.coerce` handles YAML config, action arguments, and sessions persisted before the type existed. Do not bypass it.
+  These were Chinese until the D3 migration, kept that way deliberately so that drift showed up as visible Chinese text on an English button rather than as a silent empty result. Translating them traded a visible failure mode for a silent one — knowingly, and the four-way lockstep plus that log line is what pays for it.
+
+- **Quick replies are `{label, value}`, not strings** (`Suggestion` in `domain/messages.py`). `label` is displayed; `value` is what gets sent when the button is tapped, and a button's text *is* the message the planner receives. The two differ whenever the tap must carry something the user should not have to read — a button saying "Track this order" that sends the order id along with it. A bare string still works everywhere and means `label == value` — `Suggestion.coerce` handles YAML config, action arguments, and sessions persisted before the type existed. Do not bypass it.
 
 - **Catalogue display columns are English** (`2026-08-28-englishify-display-fields.sql`): product titles and descriptions, `attributes_json.spec` / `.brand`, order and shipping status descriptions, tracking events, carrier names, receiver names and addresses. **That migration must run after `2026-08-27-unify-product-attributes.sql`**, which writes Chinese values back unconditionally; re-running the englishify script is the repair, and its product UPDATEs match on `product_id` alone so the repair always works.
 - Domain models are `@dataclass(slots=True)` with hand-written `to_dict()` / `from_dict()` pairs (not `asdict`) — when adding a field to a domain model, update **both** methods or it silently vanishes on the next state load.

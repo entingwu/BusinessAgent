@@ -95,17 +95,35 @@ class Suggestion:
   """
   One quick-reply button: what the user sees, and what gets sent when they tap it.
 
-  These were plain strings until the catalogue was englishified. The label and the value are the
-  same thing for most buttons, but they must be allowed to differ for one specific reason: a
-  button's text *is* the message sent back to the planner, which writes it verbatim into a slot
-  and passes it on to the commerce service as an attribute filter. The catalogue stores
-  「use_case": "办公"」, so a button reading "Office" that sends "Office" matches nothing — and an
-  empty result set looks exactly like "there really is no matching product". Splitting the two
-  lets the button read "Office" while still sending 办公.
+  The split exists because a button's text *is* the message sent back to the planner, which writes
+  it verbatim into a slot. Without two fields, what the user reads and what the planner receives
+  are forced to be the same string, and they are not always the same thing.
 
-  Where label and value genuinely are the same (「Under 300」, 「No thanks」), a bare string still
-  works everywhere — in YAML, in action arguments, and in state persisted before this type
-  existed. `coerce` is what makes that true; do not bypass it.
+  The clearest case is a button that acts on something the user should not have to read:
+
+      label: "Track this order"
+      value: "Track order O20260828171018C32E52"
+
+  Nobody wants an order id printed on a button, but the tap has to carry it, or the shipping flow
+  turns around and asks for the order number the bot just finished saying.
+
+  Current use in this repo is smaller: the preference buttons read "Office" while sending
+  `office`. The catalogue stores its attribute values in lower case, so the key follows suit and
+  only the label is capitalised. (That one is convention rather than necessity — the commerce
+  filter is `LOWER(...) LIKE '%value%'`, so "Office" would match too. The order-id case above is
+  the reason this type has to exist; this one is the reason it currently earns its keep.)
+
+  One piece of history, because this type's stated rationale has already had to be replaced once.
+  It was introduced when the catalogue still stored 「"use_case": "办公"」 and a button had to read
+  "Office" while sending 办公 — an argument that englishifying the catalogue
+  (2026-08-28-englishify-attribute-values.sql) then destroyed. If a change ever collapses label
+  and value again, rewrite this note rather than leaving an argument standing that no longer
+  holds. An example that can expire is a weak reason to keep a type; one that cannot is worth
+  writing down.
+
+  A bare string still works everywhere — in YAML, in action arguments, and in state persisted
+  before this type existed — and means label == value. `coerce` is what makes that true; do not
+  bypass it.
   """
   label: str
   value: str
