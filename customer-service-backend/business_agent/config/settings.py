@@ -60,6 +60,13 @@ class Settings(BaseSettings):
   rerank_model: str                     # DashScope gte-rerank-v2
   rerank_candidates: int                # how many candidates go into reranking; recall must be wider than Top-K
   rerank_score_min: float               # if even the top candidate scores below this, it is a miss
+
+  # HyDE: have the LLM write a hypothetical answer, retrieve with that too, fuse by RRF.
+  # It adds an LLM call — measured at 2.0-3.7s, more than BGE-M3 inference + Milvus + rerank
+  # combined. Measured to change nothing on this corpus (recall was never the bottleneck),
+  # so it is off by default; the code stays because the graph's fan-out needs a second path.
+  hyde_enabled: bool
+  hyde_weight: float                    # weight of the HyDE path in RRF; the direct path is always 1.0
   knowledge_context_max_tokens: int     # cap on the total length of chunks put into the prompt
 
   knowledge_log_level: str              # log level for the knowledge package; retrieval traces depend on it

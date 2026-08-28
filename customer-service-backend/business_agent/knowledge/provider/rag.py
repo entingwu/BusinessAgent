@@ -13,6 +13,8 @@ from business_agent.config.settings import settings
 from business_agent.domain.state import DialogueState
 from business_agent.infrastructure.embedding import EmbeddingUnavailableError, get_embedding_backend
 from business_agent.infrastructure.reranker import RerankUnavailableError, cliff_cutoff, rerank
+from business_agent.knowledge.fusion import rrf_merge
+from business_agent.knowledge.hyde import HydeUnavailableError, generate_hypothetical_answer
 from business_agent.infrastructure.vector_client import (
   ChromaVectorClient,
   VectorMatch,
@@ -37,6 +39,7 @@ class KnowledgeRetriever:
     self._top_k = top_k if top_k is not None else settings.knowledge_top_k
     self._score_threshold = score_threshold if score_threshold is not None else settings.knowledge_score_threshold
     self._rerank_enabled = settings.rerank_enabled
+    self._hyde_enabled = settings.hyde_enabled
 
   async def retrieve(self,
                      query_text: str,
@@ -73,12 +76,36 @@ class KnowledgeRetriever:
       # 开了 rerank 就把召回加宽：向量检索负责「捞得全」，rerank 负责「排得准」。
       # 只捞 Top-K 再重排等于让向量分决定了候选集，rerank 只能在它的错误里挑。
       recall_k = settings.rerank_candidates if self._rerank_enabled else effective_top_k
-      matches: list[VectorMatch] = await self._vector_client.query(
-        vector=embedded.dense[0],
-        top_k=recall_k,
-        filters=filters,
-        sparse_vector=embedded.sparse[0] if embedded.has_sparse else None,
-      )
+
+      async def search(embedding) -> list[VectorMatch]:
+        return await self._vector_client.query(
+          vector=embedding.dense[0],
+          top_k=recall_k,
+          filters=filters,
+          sparse_vector=embedding.sparse[0] if embedding.has_sparse else None,
+        )
+
+      matches: list[VectorMatch] = await search(embedded)
+      hyde_used = False
+
+      if self._hyde_enabled:
+        # 第二路：先让 LLM 写一段书面语气的假设性答案，用它再检索一次。
+        # 目的是跨越「口语提问」与「书面条款」之间的措辞鸿沟。
+        try:
+          hypothetical = await generate_hypothetical_answer(query_text)
+          hyde_embedded = await get_embedding_backend().embed_query(hypothetical)
+          hyde_matches = await search(hyde_embedded)
+          # RRF 按名次融合两路。按名次而不是按分数，是因为两路的分数分布不同
+          # （HyDE 文本更长更书面，整体偏高），按名次天然免疫这种尺度差异。
+          matches = rrf_merge(
+            [(matches, 1.0), (hyde_matches, settings.hyde_weight)],
+            key=lambda match: match.id,
+            max_results=recall_k,
+          )
+          hyde_used = True
+        except (HydeUnavailableError, EmbeddingUnavailableError) as error:
+          # HyDE 是提升召回的增强项，挂了退回单路检索，不让整轮失败。
+          logger.warning("hyde_unavailable falling back to single-path retrieval: %s", error)
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
       raise KnowledgeUnavailableError(str(error)) from error
@@ -123,8 +150,8 @@ class KnowledgeRetriever:
 
     # Record hit chunk ids and similarities internally so answers stay traceable (spec 5.2 / 5.3)
     logger.info(
-      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
-      query_text, filters, effective_top_k, scoring,
+      "knowledge_retrieval query=%r filters=%s top_k=%s scoring=%s hyde=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
+      query_text, filters, effective_top_k, scoring, hyde_used,
       settings.rerank_score_min if scoring == "rerank" else effective_threshold,
       len(chunks), len(rejected),
       [chunk.trace() for chunk in chunks],
