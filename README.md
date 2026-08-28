@@ -86,9 +86,27 @@ uv sync
 cp .env.example .env
 # Edit .env — at minimum set LLM_API_KEY and DATABASE_URL
 
-# 3. Run the service
+# 3. Build the knowledge index — see the warning below, this step is not optional
+uv run python -m business_agent.knowledge.ingest ingest --force
+uv run python -m business_agent.knowledge.ingest stats
+
+# 4. Run the service
 uv run python business_agent/api/main.py
 ```
+
+> **Skip step 3 and the knowledge track looks broken rather than unbuilt.** The vector index is a
+> local gitignored directory, so a fresh clone starts empty and *every* knowledge question falls
+> back to "I could not find that in the merchant's knowledge base" — which reads exactly like the
+> RAG work was never done.
+>
+> **Use `--force`.** Plain `ingest` decides what to skip by comparing `content_hash` against the
+> metadata database, and never checks whether the local vector store actually holds those vectors.
+> On a fresh clone against a populated shared database it reports every source `skipped`, exits 0,
+> and leaves you with an empty index.
+>
+> `stats` is the acceptance check, and it has exactly one criterion: **`vector_chunks` must equal
+> `metadata_chunks`.** They come from two independent places. If they differ, the index is not
+> built, whatever the ingest output said.
 
 Once running:
 
@@ -239,7 +257,27 @@ Seven knowledge intents are defined in [`business_agent/knowledge/intents.py`](c
 | `platform_rule` | `rag.default` |
 | `general_ecommerce_info` | `faq.default` + `rag.default` |
 
-`rag.default` and `faq.default` are the same vector-backed provider filtered on `source_type` — documents versus FAQ entries. The corpus lives in [`knowledge_source/`](customer-service-backend/knowledge_source/) and is indexed by `python -m business_agent.knowledge.ingest`.
+`rag.default` and `faq.default` are the same vector-backed provider filtered on `source_type` — documents versus FAQ entries. The corpus lives in [`knowledge_source/`](customer-service-backend/knowledge_source/).
+
+The knowledge base has its own CLI — it is **not** populated by starting the server:
+
+```bash
+uv run python -m business_agent.knowledge.ingest ingest --force   # load → split → embed → index
+uv run python -m business_agent.knowledge.ingest stats            # vector_chunks must equal metadata_chunks
+uv run python -m business_agent.knowledge.ingest list             # sources, chunk counts, embedding model
+uv run python -m business_agent.knowledge.ingest query --text "who pays return shipping"   # retrieval only, no LLM
+uv run python -m business_agent.knowledge.ingest calibrate        # re-derive the similarity gate
+uv run python -m business_agent.knowledge.ingest traces --sender-id <id>   # what a past turn retrieved
+```
+
+`query` and the Knowledge console page both retrieve **without calling the LLM**. That is what makes
+them useful: they separate "retrieval did not find it" from "retrieval found it and the model
+answered badly". Those two look identical in the chat window and have completely different fixes.
+
+**Editing the corpus voids the calibrated gate.** Re-titling a section is enough to shift the score
+distribution. After any change under `knowledge_source/`, re-run `ingest --force` then `calibrate`,
+and set the value it prints. Nothing errors if you skip it — retrieval simply mis-gates, which looks
+like an empty knowledge base or like the assistant answering things it should not.
 
 **Three paths never reach the LLM at all**: a retrieval miss, a result below the threshold, and a vector-store or embedding outage each return constant text. Fabrication is therefore impossible by control flow rather than discouraged by prompt wording — the distinction matters, because an audit can verify the former by reading one branch.
 
