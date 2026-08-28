@@ -6,6 +6,7 @@
 的事实同步属于第二档，不在这里。
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -59,6 +60,47 @@ HUMAN_REQUEST_KEYWORDS: tuple[str, ...] = (
   "人工服务", "叫个人", "换个人",
 )
 
+# ---------------------------------------------------------------------------
+# 英文关键词。界面是英文的，真实用户大概率说英文，而上面两组中文词对英文
+# 一条都不命中——同一个意图「能便宜点吗 / Can you give me a discount」，
+# 中文会转人工、英文不会，这是实测出来的不对称。
+#
+# 英文**不能沿用中文那套子串匹配**，必须带词边界。最典型的一个坑：
+# "sue" 是 "issue" 的子串，于是「I have an issue with my order」——一句
+# 再普通不过的话——会被判成用户要起诉。加 \b 之后就不命中了。
+#
+# 但词边界只解决一半。"agent" 与 "human" 即便带边界仍然太宽：
+# 「the shipping agent called me」「is this a human or a bot」都会误命中。
+# 这两个词只以短语形式出现，绝不单独列——这与中文那条「『人工』两字本身
+# 不够」是同一条纪律，换了个语言重演一遍。
+# ---------------------------------------------------------------------------
+
+HUMAN_REQUEST_PATTERNS_EN: tuple[str, ...] = (
+  "human agent", "live agent", "real agent", "human rep", "human representative",
+  "real person", "live person", "real human",
+  "talk to a human", "speak to a human", "chat with a human",
+  "talk to someone", "speak to someone",
+  "talk to an agent", "speak to an agent", "connect me to an agent",
+  "customer service rep", "service representative",
+  "human support", "live support",
+  "transfer me", "escalate this", "escalate to",
+  "your manager", "a manager", "supervisor",
+)
+
+RISKY_TOPIC_PATTERNS_EN: tuple[str, ...] = (
+  # 投诉与法律施压
+  "complaint", "complain", "report you", "consumer protection",
+  "better business bureau", "trading standards",
+  "lawyer", "attorney", "legal action", "sue", "small claims",
+  "chargeback", "dispute the charge",
+  # 议价
+  "discount", "lower the price", "lower price", "better price",
+  "price match", "negotiate", "haggle", "cheaper price", "give me a deal",
+  # 退换与索赔
+  "refund", "return this", "return it", "exchange it",
+  "compensation", "compensate", "reimburse",
+)
+
 # 连续多少次识别失败 / 检索未命中就转人工。
 # 取 3 而不是 2：LLM 偶发一次跑偏很常见，2 次会把大量正常会话误踢给人工；
 # 3 次基本可以确定是 Agent 真的处理不了。
@@ -86,9 +128,27 @@ class HandoffDecision:
   reason: str = ""
 
 
+def _has_cjk(text: str) -> bool:
+  return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
 def _hit(text: str, keywords: tuple[str, ...]) -> str | None:
+  """
+  Goal: 判断文本命中了哪个关键词，中英文各按各自正确的方式匹配
+
+  中文按子串：中文没有词间空格，子串就是正确的匹配单位。
+  英文按词边界：子串匹配在英文上是错的，"issue" 会命中 "sue"。
+
+  按关键词本身是否含汉字来分派，而不是按用户输入的语言——
+  这样商家在 HANDOFF_KEYWORDS 里混着配中英文词也能各自正确工作，
+  不需要先判断用户说的是哪种语言（混合语句「我的 order 怎么查」本来就无解）。
+  """
+  lowered = text.lower()
   for keyword in keywords:
-    if keyword in text:
+    if _has_cjk(keyword):
+      if keyword in text:
+        return keyword
+    elif re.search(rf"\b{re.escape(keyword.lower())}\b", lowered):
       return keyword
   return None
 
@@ -116,7 +176,7 @@ def evaluate(text: str | None,
   content = (text or "").strip()
 
   if content:
-    if (hit := _hit(content, HUMAN_REQUEST_KEYWORDS)) is not None:
+    if (hit := _hit(content, HUMAN_REQUEST_KEYWORDS + HUMAN_REQUEST_PATTERNS_EN)) is not None:
       return HandoffDecision(True, HandoffTrigger.USER_REQUESTED, f"用户明确要求人工（命中「{hit}」）")
 
     if (hit := _hit(content, extra_keywords)) is not None:
@@ -124,7 +184,8 @@ def evaluate(text: str | None,
 
     # 高风险话题只在「没有配置流程接住」时才转——闲聊轨道或澄清失败时提到投诉、
     # 议价，才是真正需要人介入的场景
-    if not handled_by_flow and (hit := _hit(content, RISKY_TOPIC_KEYWORDS)) is not None:
+    if not handled_by_flow and (
+        hit := _hit(content, RISKY_TOPIC_KEYWORDS + RISKY_TOPIC_PATTERNS_EN)) is not None:
       return HandoffDecision(True, HandoffTrigger.RISKY_TOPIC, f"命中高风险话题「{hit}」")
 
   # 计数类触发放在关键词之后：关键词是明确信号，计数是推断，明确的优先
