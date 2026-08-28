@@ -9,8 +9,8 @@ from business_agent.engines.builder import build_dialogue_engine
 from business_agent.services.dialogue_service import DialogueStateService
 from business_agent.engines.dialogue_engine import DialogueEngine
 from business_agent.repository.dialogue_repository import DialogueRepository
-# from business_agent.infrastructure.db_client import session_factory # 有坑，模块下成员
-from business_agent.infrastructure import db_client      # 包下面的模块
+# from business_agent.infrastructure.db_client import session_factory  # a trap: this binds the member
+from business_agent.infrastructure import db_client      # import the module, not the member
 
 
 def get_dialogue_engine():
@@ -19,8 +19,9 @@ def get_dialogue_engine():
 DialogueEngineDep = Annotated[DialogueEngine, Depends(get_dialogue_engine)]
 
 async def get_session():
-  # session_factory 由 lifespan 中的 init_db_engine() 赋值，必须通过模块属性读取最新值，
-  # 直接 from ... import session_factory 拿到的是导入时刻的 None
+  # session_factory is assigned by init_db_engine() inside lifespan, so it has to be read as a
+  # module attribute to get the current value — `from ... import session_factory` captures the
+  # None that was there at import time.
   async with db_client.session_factory() as session:
     yield session     # Must yield, once return code block is completed, session object is released. Release after used.
 

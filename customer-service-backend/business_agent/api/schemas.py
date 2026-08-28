@@ -14,15 +14,17 @@ class ChatObject(BaseModel):
   attributes: dict[str, Any]
 
 
-# 会话控制权归属。协议见 meta-business-agent.md 附录 E.2 第 3 条：
-# 它是会话级而非消息级，所以挂在响应顶层而不是每条消息上。
+# Session control ownership. The protocol is appendix E.2, rule 3 of meta-business-agent.md:
+# it is session-level, not message-level, so it hangs off the top of the response rather than off
+# each message.
 ControlOwner = Literal["AGENT", "PENDING_HUMAN", "HUMAN"]
 
 
 class ChatBotMessage(BaseModel):
   """
-  一条 bot 回复。text / cards / suggestions 可以同时有值。
-  object 与 cards 不并存；前端归一化：cards?.length ? cards : (object ? [object] : [])
+  One bot reply. text, cards and suggestions may all carry values at once.
+  object and cards never coexist; the front end normalises with
+  cards?.length ? cards : (object ? [object] : [])
   """
   text: str
   object: ChatObject | None = None
@@ -40,9 +42,9 @@ class ChatRequest(BaseModel):
 
   @model_validator(mode="after")
   def check_text_or_object(self):
-    # text 和 object 至少要有一个，否则后续没有任何内容可以处理
+    # At least one of text and object must be present, or there is nothing downstream to handle
     if self.text is None and self.object is None:
-      raise ValueError("text 和 object 至少需要提供一个")
+      raise ValueError("at least one of text and object must be provided")
     return self
 
 
@@ -62,7 +64,8 @@ class ChatHistoryResponse(BaseModel):
 
 class SessionStateResponse(BaseModel):
   """
-  会话状态查询（规范 4.2）。给前端显示控制权归属，也给第二档的商家接管台用。
+  Session state query (spec 4.2). Used by the front end to display control ownership, and by
+  tier 2's merchant takeover console.
   """
   sender_id: str
   control_owner: ControlOwner = "AGENT"
@@ -75,8 +78,8 @@ class SessionStateResponse(BaseModel):
 
 class HandoffRequest(BaseModel):
   """
-  坐席接管 / 回交。第一档只做控制权翻转；
-  移交包（完整历史 + 已调用工具及返回结果）是第二档。
+  A human agent claims or releases the session. Tier 1 only flips ownership;
+  the handoff package (full history plus the tools called and what they returned) is tier 2.
   """
   sender_id: str
   action: Literal["claim", "release"]

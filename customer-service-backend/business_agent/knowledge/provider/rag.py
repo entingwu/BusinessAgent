@@ -1,8 +1,9 @@
 """
-向量检索 Provider：Top-K + 相似度阈值 + metadata 过滤（规范 C.4.5 第一档）
+Vector retrieval providers: Top-K + similarity threshold + metadata filter (spec C.4.5, tier 1).
 
-未命中或全部低于阈值时**返回空列表**，不返回兜底话术——
-兜底怎么说由 KnowledgeResponder 决定，Provider 只负责「有没有召回」。
+On a miss, or when everything scores below the threshold, this **returns an empty list** rather
+than fallback text — how the fallback is worded is KnowledgeResponder's decision, and a provider
+answers only "did anything come back".
 """
 import asyncio
 import logging
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 class KnowledgeRetriever:
   """
-  Goal: 把一句自然语言问题变成一组带溯源信息的分片
+  Goal: turn one natural-language question into a set of chunks carrying provenance
   """
 
   def __init__(self,
@@ -42,14 +43,17 @@ class KnowledgeRetriever:
                      score_threshold: float | None = None,
                      provider_id: str | None = None) -> list[KnowledgeChunk]:
     """
-    Goal: 向量检索 Top-K，按阈值过滤，返回带来源标识与相似度的分片
+    Goal: retrieve Top-K by vector, filter by threshold, and return chunks with provenance and
+          similarity
     Args:
-        query_text: 用户提问
-        source_types: metadata 过滤，例如 ("faq",)；None 表示不过滤
-        top_k / score_threshold: 覆盖默认参数（阈值校准时用）
-        provider_id: 调用方的 Provider ID，打在分片上供溯源落库区分来路
-    Returns: list[KnowledgeChunk] 按相似度从高到低；未命中返回空列表
-    Raises: KnowledgeUnavailableError 检索链路不可用时抛出，由上层降级
+        query_text: the user's question
+        source_types: metadata filter, e.g. ("faq",); None means no filtering
+        top_k / score_threshold: override the defaults (used during threshold calibration)
+        provider_id: the caller's provider id, stamped on each chunk so traces keep the origins
+            apart
+    Returns: list[KnowledgeChunk] sorted by similarity, highest first; empty on a miss
+    Raises: KnowledgeUnavailableError when the retrieval stack is unavailable, for the caller to
+        degrade on
     """
     query_text = (query_text or "").strip()
     if not query_text:
@@ -74,14 +78,16 @@ class KnowledgeRetriever:
     chunks = [_to_chunk(match, provider_id) for match in matches if match.score >= effective_threshold]
     chunks.sort(key=lambda chunk: chunk.score or 0.0, reverse=True)
 
-    # 被阈值挡掉的候选也打进日志：未命中那一轮「差多少才够阈值」是调阈值时最有用的一条信息。
-    # 这部分不落 retrieval_traces 表（表只记进入过 responder 的分片），日志是它唯一的去处。
+    # Candidates rejected by the threshold go into the log too: on a miss, "how far short of the
+    # threshold was it?" is the single most useful number when tuning. These do not reach the
+    # retrieval_traces table (which only records chunks that made it to the responder), so the
+    # log is their only home.
     rejected = [
       {"chunk_id": match.id, "score": round(match.score, 4)}
       for match in matches if match.score < effective_threshold
     ]
 
-    # 内部记录命中的分片 ID 与相似度，回复可溯源（规范 5.2 / 5.3）
+    # Record hit chunk ids and similarities internally so answers stay traceable (spec 5.2 / 5.3)
     logger.info(
       "knowledge_retrieval query=%r filters=%s top_k=%s threshold=%s hits=%s dropped=%s traces=%s rejected=%s",
       query_text, filters, effective_top_k, effective_threshold,
@@ -94,10 +100,10 @@ class KnowledgeRetriever:
 
 def _to_chunk(match: VectorMatch, provider_id: str | None = None) -> KnowledgeChunk:
   """
-  Goal: VectorMatch -> KnowledgeChunk，向量库的结构到此为止
+  Goal: VectorMatch -> KnowledgeChunk. The vector store's own shapes stop here.
   Args:
       match
-      provider_id: 召回它的 Provider ID
+      provider_id: the id of the provider that returned it
   Returns: KnowledgeChunk
   """
   metadata = match.metadata or {}
@@ -115,8 +121,8 @@ def _to_chunk(match: VectorMatch, provider_id: str | None = None) -> KnowledgeCh
 
 class VectorKnowledgeProvider(Provider):
   """
-  Goal: 所有基于向量库的 Provider 的公共实现。
-        子类只需声明 provider_id 与 source_types（metadata 过滤条件）。
+  Goal: the shared implementation for every vector-backed provider.
+        A subclass only declares provider_id and source_types (its metadata filter).
   """
   source_types: tuple[str, ...] = ()
 
@@ -125,14 +131,15 @@ class VectorKnowledgeProvider(Provider):
 
   async def retrival(self, state: DialogueState) -> list[KnowledgeChunk]:
     """
-    Goal: 用本轮用户提问做向量检索
+    Goal: run a vector search using this turn's user question
     Args:
-        state: 对话状态
-    Returns: list[KnowledgeChunk]；未命中返回空列表
+        state: the dialogue state
+    Returns: list[KnowledgeChunk]; empty on a miss
     Raises: KnowledgeUnavailableError
     """
     query_text = self._build_query_text(state)
-    # provider_id 一并传下去，分片带着来路回来，responder 落溯源记录时按它区分
+    # provider_id is passed down so chunks come back knowing their origin, which is what the
+    # responder writes traces by
     return await self._retriever.retrieve(
       query_text, source_types=self.source_types, provider_id=self.provider_id)
 

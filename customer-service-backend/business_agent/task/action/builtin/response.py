@@ -15,60 +15,65 @@ from business_agent.chat_history.builder import ChatHistoryBuilder
 
 class ActionResponse(Action):
   name = "action_response"
-  description = "把 YAML 里配置的文案渲染成回复，可选让 LLM 改写或从零生成"
-  # 文案由 YAML 的 args 提供，不从槽位读固定入参（模板里引用哪些槽位由配置决定）；
-  # 它只产出回复，不写回任何槽位
+  description = ("Render the text configured in YAML as a reply, optionally having the LLM "
+                 "rewrite it or generate one from scratch")
+  # The text comes from the YAML args; there is no fixed slot input, since which slots the
+  # template references is decided by configuration. It only produces a reply and writes back no
+  # slots.
   is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """
     According to action_kwargs text content, analyze placeholder.
-    封装到ActionResult的BotMessage内容
-    Goal: 响应YAML文件内容(user_flows以及system_flows中的action_response的args内容展示出来)
-    展示的内容注意以下几点：
-    1. 展示的结构是什么类型: dict/str
-    2. 展示的内容（字符串）：
-    2.1 有需要格式化的变量：
-      - 例如 "好的，我们先处理{{context.started_flow_name}}"。（站位特点是双{{}}占位:jinja2模版)
-      - 例如 "订单{{slots.order_number}}当前状态{{slots.order_status}}.{{slots.order_summary}}"
-    2.2 没有需要格式化的变量：例如:"请简单说一下退款原因"
+    Wrap the configured text into the BotMessage of an ActionResult.
+
+    Goal: render the args of an action_response step from user_flows.yml or system_flows.yml.
+
+    Two things to keep in mind about what gets rendered:
+    1. The args may be a dict or a plain string.
+    2. The string may or may not contain variables:
+    2.1 With variables — Jinja2 placeholders, recognisable by the double braces:
+      - e.g. "Sure, let's start with {{context.started_flow_name}}."
+      - e.g. "Order {{slots.order_number}} is currently: {{slots.order_status}}. {{slots.order_summary}}"
+    2.2 Without variables — e.g. "Could you tell me briefly why you want a refund?"
     Args:
         action_kwargs:
         state:
     """
 
-    # 快捷回复按钮：三种模式都可以带。它不参与 LLM 改写，
-    # 因为按钮文案要和意图集对得上，交给模型润色会改出识别不了的说法
+    # Quick-reply buttons: available in all three modes. They are never sent through the LLM
+    # rewrite, because a button label has to line up with the intent set, and letting the model
+    # polish it produces wording the planner no longer recognises.
     suggestions = list(action_kwargs.get('suggestions') or [])
 
-    # 1. 获取响应的模式
+    # 1. Read the response mode
     mode = action_kwargs.get('mode', 'static')
 
-    # 2. 判断模式
+    # 2. Dispatch on it
     if mode == "rephrase":
-      # rephrase: 先把YAML里的原始文案渲染出来，再让LLM在此基础上改写
-      # a) 获取提示词
+      # rephrase: render the original YAML text first, then have the LLM rewrite from it
+      # a) Get the prompt
       prompt = action_kwargs['prompt']
 
-      # b) 渲染的文本目标
+      # b) Render the target text
       render_text = self._render_text(action_kwargs['text'], state)
 
-      # c) 调用LLM
+      # c) Call the LLM
       rewritten = await self._call_llm(prompt, state, render_text)
       return ActionResult(messages=[BotMessage(text=rewritten, suggestions=suggestions)])
 
     elif mode == "generate":
-      # generate: 从0到1由LLM生成，不依赖YAML里的原始文案，
-      # 所以这里不读取也不渲染 text，current_response 交给 _call_llm 用默认空串
-      # a) 获取提示词
+      # generate: written by the LLM from scratch, independent of the YAML text — so text is
+      # neither read nor rendered here, and current_response is left to _call_llm's empty default
+      # a) Get the prompt
       prompt = action_kwargs['prompt']
 
-      # b) 调用LLM
+      # b) Call the LLM
       generated = await self._call_llm(prompt, state)
       return ActionResult(messages=[BotMessage(text=generated, suggestions=suggestions)])
 
     else:
-      # static: 直接渲染YAML里的文案
+      # static: render the YAML text as-is
       render_text = self._render_text(action_kwargs['text'], state)
       return ActionResult(messages=[BotMessage(text=render_text, suggestions=suggestions)])
 
@@ -89,7 +94,7 @@ class ActionResponse(Action):
 
   def _render_text(self, text: str, state: DialogueState) -> str:
     """
-    Goal: 格式化响应文本中的变量
+    Goal: interpolate the variables in the response text
     Args:
         text:
     """
@@ -106,4 +111,4 @@ class Context:
 if __name__ == "__main__":
   template = Template("abc")
   # print(template.render(slots={"order_number": "12345"}))
-  print(template.render(context=Context(started_flow_name="订单状态查询")))
+  print(template.render(context=Context(started_flow_name="order status lookup")))

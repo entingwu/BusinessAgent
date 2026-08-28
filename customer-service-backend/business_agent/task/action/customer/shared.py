@@ -7,7 +7,7 @@ from business_agent.infrastructure import http_client
 
 def _base_url() -> str:
    """
-   Goal: 获取中台服务地址
+   Goal: the commerce service base URL
    """
    return settings.commerce_api_base_url.rstrip("/")
 
@@ -18,7 +18,7 @@ def _extract_data(result: dict | None) -> dict | None:
 
 async def fetch_order(order_id: str) -> dict | None:
     """
-    Goal: 根据订单ID，拿到订单数据
+    Goal: fetch an order by order id
     """
     try:
       r = await http_client.http_client.get(f"{_base_url()}/orders/{quote(order_id)}")
@@ -28,7 +28,7 @@ async def fetch_order(order_id: str) -> dict | None:
 
 async def fetch_logistics(order_id: str) -> dict | None:
     """
-    Goal: 根据订单ID，拿到订单物流信息
+    Goal: fetch an order's shipping information by order id
     """
     try:
       r = await http_client.http_client.get(f"{_base_url()}/orders/{quote(order_id)}/logistics")
@@ -38,7 +38,7 @@ async def fetch_logistics(order_id: str) -> dict | None:
 
 async def fetch_product(product_id: str) -> dict | None:
     """
-    Goal: 根据商品ID，获取商品的数据
+    Goal: fetch a product by product id
     """
     try:
       r = await http_client.http_client.get(f"{_base_url()}/products/{quote(product_id)}")
@@ -54,18 +54,21 @@ async def search_products(*,
                           in_stock: bool | None = None,
                           limit: int = 5) -> dict | None:
     """
-    Goal: 按偏好检索商品目录（规范 3.3.3 第 2 步）
+    Goal: search the product catalogue by preference (spec 3.3.3, step 2)
 
-    中台的属性名是白名单：use_case / style / spec / size / color / brand / warranty。
-    传白名单外的名字会返回 400 而不是空列表——这是中台有意的设计，
-    「字段不存在」与「没有匹配商品」必须可区分，否则 Agent 会把参数错误
-    当成业务结论告诉用户「没有找到商品」。所以这里不做静默过滤，
-    传错就让它 400，由调用方在日志里看见。
+    The commerce service whitelists attribute names: use_case / style / spec / size / color /
+    brand / warranty. An attribute outside the whitelist returns 400 rather than an empty list —
+    that is deliberate on the commerce side. "This field does not exist" and "no product matches"
+    must stay distinguishable, or the Agent reports a parameter error to the user as a business
+    conclusion ("I could not find any products"). So nothing is filtered out silently here: a bad
+    name is allowed to 400 so the caller sees it in the log.
 
     Args:
-        attrs: 属性过滤，如 {"use_case": "办公", "style": "极简"}
+        attrs: attribute filters, e.g. {"use_case": "办公", "style": "极简"}
+            (the values stay in Chinese — they are matching keys against the commerce catalogue)
     Returns:
-        中台返回的 data 部分（含 items / total / has_more）；请求失败返回 None
+        the data section of the commerce response (items / total / has_more); None if the
+        request failed
     """
     params: list[tuple[str, str]] = []
     if keyword:

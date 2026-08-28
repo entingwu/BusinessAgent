@@ -1,8 +1,8 @@
 """
-知识源加载：Markdown / TXT / CSV
+Knowledge source loading: Markdown / TXT / CSV.
 
-MVP 的知识源是自己写的政策文档与 FAQ 表，Python 直读即可，
-不引 Apache Tika 这类多格式解析（规范 C.4.2 文档解析环节）。
+The MVP's sources are policy documents and FAQ tables we wrote ourselves, which Python reads
+directly — no multi-format parser such as Apache Tika (spec C.4.2, document parsing).
 """
 import csv
 import hashlib
@@ -12,7 +12,8 @@ from pathlib import Path
 
 SUPPORTED_SUFFIXES = (".md", ".markdown", ".txt", ".csv")
 
-# FAQ / CSV 一条一片，不做语义切分；文档走递归语义切分
+# FAQ and CSV: one entry per chunk, no semantic splitting. Documents go through recursive
+# semantic splitting.
 SPLIT_MODE_ENTRY = "entry"
 SPLIT_MODE_SEMANTIC = "semantic"
 
@@ -25,9 +26,9 @@ _SECTION_PATTERN = re.compile(r"^(#{2,3})\s+(.*)$", re.MULTILINE)
 @dataclass(slots=True)
 class SourceEntry:
   """
-  Goal: 知识源里的一个自然单元
-        文档 = 一个章节（`##` / `###` 之间的内容）
-        FAQ  = 一条问答
+  Goal: one natural unit within a knowledge source
+        document = one section (the content between `##` / `###` headings)
+        FAQ      = one question-and-answer entry
   """
   title: str
   text: str
@@ -36,12 +37,13 @@ class SourceEntry:
 @dataclass(slots=True)
 class LoadedSource:
   """
-  Goal: 一份加载完成的知识源
+  Goal: a fully loaded knowledge source
   Attributes:
-      source_id: 由相对路径推导，例如 policy/return_policy.md -> policy.return_policy
+      source_id: derived from the relative path, e.g. policy/return_policy.md ->
+          policy.return_policy
       source_type: faq / document
       split_mode: entry / semantic
-      content_hash: 原文哈希，用于判断是否需要重新入库
+      content_hash: hash of the source text, used to decide whether a re-ingest is needed
   """
   source_id: str
   source_type: str
@@ -54,10 +56,10 @@ class LoadedSource:
 
 def discover_files(root_dir: Path) -> list[Path]:
   """
-  Goal: 递归找出目录下所有支持的知识源文件
+  Goal: recursively find every supported knowledge source file under a directory
   Args:
-      root_dir: 知识源根目录
-  Returns: list[Path] 已排序，保证入库顺序稳定
+      root_dir: the knowledge source root directory
+  Returns: a sorted list[Path], so ingest order stays stable
   """
   if not root_dir.exists():
     return []
@@ -65,18 +67,19 @@ def discover_files(root_dir: Path) -> list[Path]:
     path for path in root_dir.rglob("*")
     if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES and not path.name.startswith(".")
   ]
-  # README 是给人看的说明，不入库
+  # README is documentation for people, not a knowledge source
   files = [path for path in files if path.stem.lower() != "readme"]
   return sorted(files)
 
 
 def build_source_id(root_dir: Path, file_path: Path) -> str:
   """
-  Goal: 由相对路径推导稳定的知识源 ID（更新与删除都按它定位）
+  Goal: derive a stable knowledge source id from the relative path (updates and deletes both
+        locate a source by it)
   Args:
-      root_dir: 知识源根目录
-      file_path: 文件路径
-  Returns: str 例如 "faq.after_sales_faq"
+      root_dir: the knowledge source root directory
+      file_path: path to the file
+  Returns: e.g. "faq.after_sales_faq"
   """
   relative = file_path.relative_to(root_dir)
   parts = list(relative.parts[:-1]) + [relative.stem]
@@ -85,7 +88,8 @@ def build_source_id(root_dir: Path, file_path: Path) -> str:
 
 def detect_source_type(root_dir: Path, file_path: Path) -> str:
   """
-  Goal: 判定知识源类型。faq 目录下的文件与所有 CSV 视为 FAQ，其余为文档。
+  Goal: decide the source type. Files under faq/ and every CSV count as FAQ; everything else is
+        a document.
   Args:
       root_dir / file_path
   Returns: str faq | document
@@ -98,10 +102,10 @@ def detect_source_type(root_dir: Path, file_path: Path) -> str:
 
 def load_source(root_dir: Path, file_path: Path) -> LoadedSource:
   """
-  Goal: 把一个文件加载成 LoadedSource
+  Goal: load one file into a LoadedSource
   Args:
-      root_dir: 知识源根目录
-      file_path: 文件路径
+      root_dir: the knowledge source root directory
+      file_path: path to the file
   Returns: LoadedSource
   """
   raw_text = file_path.read_text(encoding="utf-8")
@@ -135,17 +139,26 @@ def load_source(root_dir: Path, file_path: Path) -> LoadedSource:
 
 def _load_csv(file_path: Path) -> tuple[str, list[SourceEntry]]:
   """
-  Goal: CSV 一行一条，一条即一片
-        识别 question/answer 两列；没有这两列时把所有列拼成 "列名：值"
+  Goal: one CSV row per entry, one entry per chunk.
+        Recognises question/answer columns; without them, every column is joined as
+        "column name: value"
   Args:
       file_path
-  Returns: (知识源名称, 条目列表)
+  Returns: (source name, list of entries)
   """
   entries: list[SourceEntry] = []
   with file_path.open("r", encoding="utf-8", newline="") as handle:
     reader = csv.DictReader(handle)
     for row in reader:
       normalized = {(key or "").strip().lower(): (value or "").strip() for key, value in row.items()}
+      # The Chinese column names and the 「问：」/「答：」 wording below are **deliberately not
+      # englishified**. They are not display text — they decide what the chunk body looks like,
+      # and the chunk body is what gets embedded. KNOWLEDGE_SCORE_THRESHOLD=0.58 was calibrated
+      # against exactly this wording (see the note on embedding_text() in splitter.py), so
+      # changing it silently invalidates the threshold: retrieval keeps working, the scores just
+      # shift, and questions that used to be answered start hitting the fallback.
+      # The Chinese header names are also what the shipped CSV actually uses.
+      # Changing any of this means re-running `ingest --force` and `calibrate`.
       question = normalized.get("question") or normalized.get("问题") or ""
       answer = normalized.get("answer") or normalized.get("答案") or ""
       category = normalized.get("category") or normalized.get("分类") or ""
@@ -167,11 +180,12 @@ def _load_csv(file_path: Path) -> tuple[str, list[SourceEntry]]:
 
 def _load_markdown(file_path: Path, raw_text: str) -> tuple[str, list[SourceEntry]]:
   """
-  Goal: Markdown 先按 `##` / `###` 标题拆成章节，章节名即分片标题（溯源可读）
-        章节内部是否继续切分交给 splitter 按 token 上限决定
+  Goal: split Markdown into sections at `##` / `###` headings, using the heading as the chunk
+        title so traces stay readable. Whether a section is split further is left to the splitter
+        and its token limit.
   Args:
       file_path / raw_text
-  Returns: (文档标题, 章节条目列表)
+  Returns: (document title, list of section entries)
   """
   title_match = re.search(r"^#\s+(.*)$", raw_text, re.MULTILINE)
   document_title = title_match.group(1).strip() if title_match else file_path.stem
@@ -181,7 +195,7 @@ def _load_markdown(file_path: Path, raw_text: str) -> tuple[str, list[SourceEntr
     return document_title, [SourceEntry(title=document_title, text=raw_text.strip())]
 
   entries: list[SourceEntry] = []
-  # 首个标题之前的引言部分
+  # The preamble before the first heading
   preamble = raw_text[: matches[0].start()]
   preamble = _strip_document_title(preamble).strip()
   if preamble:
@@ -196,7 +210,8 @@ def _load_markdown(file_path: Path, raw_text: str) -> tuple[str, list[SourceEntr
       continue
     entries.append(SourceEntry(
       title=f"{document_title} / {section_title}",
-      # 标题写回正文，检索时标题里的关键词同样参与匹配
+      # Write the heading back into the body so its keywords take part in matching at retrieval
+      # time
       text=f"{section_title}\n{body}",
     ))
 

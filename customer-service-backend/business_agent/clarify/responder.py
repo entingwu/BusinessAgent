@@ -17,13 +17,13 @@ class ClarifyResponder:
   async def respond(self, 
                     reason: ClarifyReason, 
                     state: DialogueState) -> list[BotMessage]:
-    # 1. 构建澄清话术需要的提示词模版变量值
+    # 1. Build the template variables the clarification wording needs
     prompt_inputs = self._build_prompt_inputs(reason, state)
 
-    # 2. 格式化模版，调用LLM
+    # 2. Render the template and call the LLM
     rewritten = await self._invoke(prompt_inputs)
 
-    # 3. 返回
+    # 3. Return
     return rewritten
 
   def _build_prompt_inputs(self,
@@ -45,19 +45,19 @@ class ClarifyResponder:
       }
 
   async def _invoke(self, prompt_inputs: dict[str, Any]) -> list[BotMessage]:
-      # 1. 加载提示词模版
+      # 1. Load the prompt template
       prompt_template_str = load_prompt_template("clarify_respond")
 
-      # 2. 实例化提示词模版对象
+      # 2. Instantiate the template object
       prompt_template = PromptTemplate.from_template(template=prompt_template_str, template_format="jinja2")
 
-      # 3. 构建chain
+      # 3. Build the chain
       chain = prompt_template | llm_client | StrOutputParser()
 
-      # 4. 执行链
+      # 4. Run the chain
       result = await  chain.ainvoke(prompt_inputs)
 
-      # 5. 返回结果
+      # 5. Return the result
       return [BotMessage(text=result)]
 
 

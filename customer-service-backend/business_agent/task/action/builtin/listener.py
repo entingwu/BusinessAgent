@@ -6,7 +6,8 @@ from business_agent.task.action.base import Action, ActionResult
 
 class ActionListener(Action):
   name = "action_listen"
-  description = "停下来等用户下一句话，不产生回复也不调用任何外部系统"
+  description = ("Stop and wait for the user's next message; produces no reply and calls no "
+                 "external system")
   is_write = False
 
   async def run(self,

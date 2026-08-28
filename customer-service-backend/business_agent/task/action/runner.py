@@ -30,13 +30,14 @@ class ActionRunner:
 
   async def run(self, action_call: ActionCall, state: DialogueState) -> ActionResult:
     """
-    调用时机: 流程推进器在推进流程且流程步骤是action类型时候, 会调用到
+    Called by the flow executor whenever it advances onto a step of type action.
     """
     action = self.action_register.get_action(action_call.action_name)
 
-    # 规范 5.3 第一档：记录工具调用的入参、出参与耗时。
-    # 挂在 runner 而不是各个 action 里——这里是所有动作的唯一必经点，
-    # 挂一次就覆盖全部，且新增 action 自动带上，不会有人忘记加
+    # Spec 5.3, tier 1: record each tool call's inputs, outputs and duration.
+    # It lives on the runner rather than in each action because this is the one point every
+    # action must pass through — instrumenting it once covers all of them, and a new action gets
+    # it automatically instead of relying on someone remembering.
     started_at = time.perf_counter()
     try:
       action_result = await action.run(action_call.action_kwargs, state)
@@ -54,9 +55,10 @@ class ActionRunner:
       "messages=%d cards=%d slots_out=%s",
       action_call.action_name, state.sender_id, elapsed_ms,
       brief(action_call.action_kwargs),
-      # 真实入参在槽位里而不是 action_kwargs：查订单/查物流/推荐三个 action
-      # 都从 state.active_task.slots 取值，只记 action_kwargs 的话每次都是
-      # args={}，回答不了「这次到底查的哪个订单号」——而那正是 5.3 要日志的原因
+      # The real inputs live in the slots, not in action_kwargs: the order lookup, shipment
+      # lookup and recommendation actions all read from state.active_task.slots, so logging only
+      # action_kwargs gives args={} every time and cannot answer "which order number was this
+      # actually looking up" — which is the whole reason 5.3 asks for the log.
       brief(self._slots_of(state)),
       len(action_result.messages),
       sum(len(message.cards) for message in action_result.messages),

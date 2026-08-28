@@ -10,14 +10,14 @@ from business_agent.task.action.runner import ActionRunner
 
 def register_builtin_action(action_runner: ActionRunner):
   """
-  Goal: 注册到runner中的注册中心
+  Goal: register into the runner's registry
   """
   action_runner.action_register.registry_action(ActionResponse())
   action_runner.action_register.registry_action(ActionListener())
 
 def register_customer_action(action_runner: ActionRunner):
   """
-  Goal: 将自定义的三个action注册到runner中的注册中心
+  Goal: discover the custom actions and register them into the runner's registry
   """
   package = importlib.import_module("business_agent.task.action.customer")
   for _, module_name, is_pkg in pkgutil.iter_modules(path=package.__path__, 

@@ -1,13 +1,16 @@
 """
-切分：LangChain RecursiveCharacterTextSplitter（规范 C.4.2）
+Splitting, via LangChain's RecursiveCharacterTextSplitter (spec C.4.2).
 
-递归分隔符按 `\n## / \n### / \n\n / 。` 逐级下沉，长度函数用 tokens.estimate_tokens，
-所以 KNOWLEDGE_CHUNK_SIZE / KNOWLEDGE_CHUNK_OVERLAP 两个配置项的单位是 token 而不是字符。
+The recursive separators step down through `\n## / \n### / \n\n / 。`, and the length function is
+tokens.estimate_tokens — so KNOWLEDGE_CHUNK_SIZE and KNOWLEDGE_CHUNK_OVERLAP are measured in
+tokens, not characters.
 
-FAQ 与 CSV 走 SPLIT_MODE_ENTRY：一条一片，不做语义切分——条目本身即语义单元。
+FAQ and CSV sources use SPLIT_MODE_ENTRY: one entry per chunk, no semantic splitting, because an
+entry already is the semantic unit.
 
-送进 Embedding 的文本不等于分片正文，拼法见 embedding_text()——那里的注释解释了
-为什么 FAQ 不能把标题拼进去，以及它和 KNOWLEDGE_SCORE_THRESHOLD 的绑定关系。
+The text that goes to the embedding model is not the same as the chunk body — see
+embedding_text(), whose comment explains why an FAQ must not have its title prepended, and how
+that is bound to KNOWLEDGE_SCORE_THRESHOLD.
 """
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,17 +21,17 @@ from business_agent.config.settings import settings
 from business_agent.knowledge.ingest.loader import SPLIT_MODE_ENTRY, SPLIT_MODE_SEMANTIC, LoadedSource
 from business_agent.knowledge.ingest.tokens import estimate_tokens
 
-# 递归分隔符：先在标题处断，再在段落处断，最后才在句号处断
+# Recursive separators: break at headings first, then paragraphs, and only then at sentence ends
 SEPARATORS = ["\n## ", "\n### ", "\n\n", "。", "\n", "，", " ", ""]
 
 
 @dataclass(slots=True)
 class PreparedChunk:
   """
-  Goal: 切分完成、等待向量化的一个分片
+  Goal: one split chunk, awaiting embedding
   Attributes:
-      chunk_id: "{source_id}#{position:04d}"，向量库与元数据库共用同一个 ID
-      position: 片段在知识源内的序号，溯源用
+      chunk_id: "{source_id}#{position:04d}" — the vector store and the metadata table share it
+      position: the chunk's index within its source, used for tracing
   """
   chunk_id: str
   source_id: str
@@ -42,10 +45,10 @@ class PreparedChunk:
 
   def metadata(self, embedding_model: str) -> dict[str, Any]:
     """
-    Goal: 写进向量库的 metadata。检索时的过滤与溯源都靠它，
-          值只能是 str / int / float / bool（Chroma 限制）。
+    Goal: the metadata written into the vector store. Retrieval-time filtering and tracing both
+          rely on it, and values may only be str / int / float / bool (a Chroma restriction).
     Args:
-        embedding_model: 本次入库使用的 Embedding 模型名
+        embedding_model: the name of the embedding model used for this ingest
     Returns: dict
     """
     return {
@@ -62,10 +65,10 @@ class PreparedChunk:
 def build_text_splitter(chunk_size: int | None = None,
                         chunk_overlap: int | None = None) -> RecursiveCharacterTextSplitter:
   """
-  Goal: 构造语义切分器
+  Goal: build the semantic splitter
   Args:
-      chunk_size: 分片大小（token），默认取 settings.knowledge_chunk_size
-      chunk_overlap: 重叠长度（token），默认取 settings.knowledge_chunk_overlap
+      chunk_size: chunk size in tokens; defaults to settings.knowledge_chunk_size
+      chunk_overlap: overlap in tokens; defaults to settings.knowledge_chunk_overlap
   Returns: RecursiveCharacterTextSplitter
   """
   return RecursiveCharacterTextSplitter(
@@ -81,10 +84,11 @@ def split_source(source: LoadedSource,
                  chunk_size: int | None = None,
                  chunk_overlap: int | None = None) -> list[PreparedChunk]:
   """
-  Goal: 把一份知识源切成分片，并给每片打上来源标识（知识源 ID、标题、片段位置）
+  Goal: split one knowledge source into chunks, stamping each with its provenance (source id,
+        title, position)
   Args:
-      source: 已加载的知识源
-      chunk_size / chunk_overlap: 覆盖默认参数（阈值校准时用）
+      source: the loaded knowledge source
+      chunk_size / chunk_overlap: override the defaults (used during threshold calibration)
   Returns: list[PreparedChunk]
   """
   chunks: list[PreparedChunk] = []
@@ -115,32 +119,38 @@ def split_source(source: LoadedSource,
 
 def embedding_text(chunk: PreparedChunk) -> str:
   """
-  Goal: 送去向量化的文本。
+  Goal: the text that gets embedded.
 
-  ⚠️ 改这个函数之前先读完下面这段，它直接决定 KNOWLEDGE_SCORE_THRESHOLD 还能不能用。
+  ⚠️ Read this whole note before changing this function — it decides directly whether
+  KNOWLEDGE_SCORE_THRESHOLD is still usable.
 
-  entry 模式（FAQ / CSV）：**只 embed 正文，绝对不要把 chunk.title 拼进来。**
-    title 形如「常见问题：退货运费谁出？」，问题原文在正文里已经有一遍，拼上去是重复；
-    真正的问题是「常见问题：」这个共同前缀会给所有 FAQ 向量注入一个公共分量，
-    把任意短问句与 FAQ 的基线相似度整体抬高，可分区间当场被挤没。
+  entry mode (FAQ / CSV): **embed the body only, and never prepend chunk.title.**
+    A title looks like 「常见问题：退货运费谁出？」 and the question itself already appears in the
+    body, so prepending it duplicates the text. The real damage is that the shared prefix
+    「常见问题：」 injects a common component into every FAQ vector, raising the baseline
+    similarity between any short question and every FAQ, which collapses the separable range on
+    the spot.
 
-  semantic 模式（文档）：正文开头已带章节名，这里再补一个知识源名称
-    （「退货政策」「配送政策」），让文档主题这一层语境参与匹配。
+  semantic mode (documents): the body already opens with its section name, so the source name is
+    added here (「退货政策」, 「配送政策」) to bring the document-topic layer of context into the
+    match.
 
-  校准实测（34 条样本，见 knowledge_eval/calibration_set.jsonl，
-  用 `python -m business_agent.knowledge.ingest calibrate` 复现）：
+  Measured during calibration (34 samples, see knowledge_eval/calibration_set.jsonl; reproduce
+  with `python -m business_agent.knowledge.ingest calibrate`):
 
-    | 方案                       | 有答案最低分 | 无答案最高分（剔除离群点后） |
+    | scheme                          | lowest score with answer | highest without (outliers removed) |
     |----------------------------|-------------|------------------------------|
-    | 标题+正文（曾经的写法）      | 0.5858      | 0.5518                        |
-    | 仅正文                      | 0.5773      | 0.5605                        |
-    | 知识源名+正文（当前，混合）  | 0.6030      | 0.5605                        |
+    | title + body (the old way)      | 0.5858                   | 0.5518                             |
+    | body only                       | 0.5773                   | 0.5605                             |
+    | source name + body (current)    | 0.6030                   | 0.5605                             |
 
-  当前方案的可分区间是 (0.5605, 0.6030)，取中点得到 KNOWLEDGE_SCORE_THRESHOLD=0.58。
-  改回「标题+正文」会把区间压到 (0.5518, 0.5858)，0.58 直接落到有答案那批里边，
-  一批本该答上来的问题会开始走兜底。
+  The current scheme's separable range is (0.5605, 0.6030), whose midpoint gives
+  KNOWLEDGE_SCORE_THRESHOLD=0.58.
+  Reverting to "title + body" squeezes the range to (0.5518, 0.5858), which puts 0.58 inside the
+  answerable set — a batch of questions that should be answered would start falling back instead.
 
-  所以：**动了这个函数就必须重跑 calibrate 并重新定阈值**，两件事是绑在一起的。
+  So: **changing this function means re-running calibrate and re-deriving the threshold.** The two
+  are bound together.
 
   Args:
       chunk

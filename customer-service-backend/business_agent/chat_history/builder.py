@@ -44,13 +44,13 @@ class ChatHistoryBuilder:
 
     @classmethod
     def _render_text_message(cls, text: str | None) -> str:
-      # 历史记录里可能存在 text 为 None 的消息，这里做空值保护
+      # A message in the history may have text=None, so guard against it here
       return text.strip() if text else ""
 
     @classmethod
     def _render_object_message(cls, object: FocusedObject) -> str:
       id = object.id
-      label = "订单" if object.type == "order" else "商品"
+      label = "order" if object.type == "order" else "product"
       title = object.title
 
       # k=v

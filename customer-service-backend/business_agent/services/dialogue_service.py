@@ -35,7 +35,7 @@ class DialogueStateService:
 
   async def get_chat_history(self, sender_id: str) -> list[ChatHistoryMessage]:
         """
-        Goal: 查询该用户所有会话下的聊天内容（当前session下的历史对话）
+        Goal: read this user's chat history (the messages in the current session)
         """
         state = await self._repository.load_state(sender_id)
         final_chat_history_messages = []
@@ -64,16 +64,16 @@ class DialogueStateService:
 
   async def get_session_state(self, sender_id: str) -> DialogueState:
       """
-      Goal: 读当前会话状态（规范 4.2：当前流程、步骤、槽位、控制权归属）。
-            只读，不经过引擎，也不落库
+      Goal: read the current session state (spec 4.2: current flow, step, slots and control
+            ownership). Read-only — it does not go through the engine and writes nothing.
       """
       return await self._repository.load_state(sender_id)
 
   async def set_control_owner(self, sender_id: str, action: str, reason: str) -> DialogueState:
       """
-      Goal: 坐席接管或回交。第一档只翻转控制权
+      Goal: a human agent claims or releases the session. Tier 1 only flips ownership.
       Args:
-          action: "claim" 坐席接管 / "release" 交还 Agent
+          action: "claim" for a human taking over, "release" to hand it back to the Agent
       """
       state = await self._repository.load_state(sender_id)
       if action == "claim":

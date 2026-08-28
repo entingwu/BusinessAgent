@@ -39,7 +39,7 @@ class SystemContext:
   System process context base class
   flow_id: system proess id: system_task_started
   step_id: system process id: start
-  flow_id/step_id must use these two names. [流程推进器]
+  flow_id/step_id must use these two names. [used by the flow executor]
   """
   flow_id: str
   step_id: str
@@ -51,7 +51,7 @@ class SystemContext:
   def from_dict(data: dict[str, Any]) -> "SystemContext":
     flow_id = data['flow_id']
     clz =  SYSTEM_CONTEXT_TO_CLASS[flow_id]
-    return clz(**data) # 解字典
+    return clz(**data)  # unpack the dict
 
 
 @dataclass(slots=True)
@@ -76,11 +76,11 @@ class SystemTaskResumedContext(SystemContext):
 
 @dataclass(slots=True)
 class SystemTaskResumeFailedContext(SystemContext):
-  """没有找到可恢复的业务流程时使用。"""
+  """Used when there is no paused business flow to resume."""
 
 @dataclass(slots=True)
 class SystemTaskCancelFailedContext(SystemContext):
-  """当前没有正在办理的业务流程，没有东西可以取消时使用。"""
+  """Used when nothing is in progress, so there is nothing to cancel."""
 
 # system_task_canceled
 @dataclass(slots=True)
@@ -108,9 +108,10 @@ if __name__ == '__main__':
 @dataclass(slots=True)
 class SystemCannotHandleContext(SystemContext):
   """
-  reason 决定走 system_flows.yml 里哪个分支：
-  not_supported / clarification_rejected，都不匹配则落 ask_rephrase。
-  这个流程此前从未被启动过——YAML 写好了，代码里零引用。
+  `reason` decides which branch of system_flows.yml is taken: not_supported or
+  clarification_rejected, falling through to ask_rephrase when neither matches.
+  This flow had never once been started — the YAML was written and nothing in the code referenced
+  it.
   """
   reason: str
 

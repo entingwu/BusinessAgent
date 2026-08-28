@@ -10,7 +10,7 @@ class KnowledgeIntent:
 
 
 
-# 系统支持的所有知识意图
+# Every knowledge intent the system supports
 KNOWLEDGE_INTENTS: dict[str, KnowledgeIntent] = {
     "product_info": KnowledgeIntent(
         id="product_info", description="Questions about product information",
@@ -36,11 +36,13 @@ KNOWLEDGE_INTENTS: dict[str, KnowledgeIntent] = {
         id="platform_rule", description="Questions about platform rules",
         provider_ids=["rag.default"],
     ),
-    # 描述必须写窄。中文原文是「电商通用信息咨询」，直译成 "General e-commerce
-    # questions" 之后范围被放大了一圈——实测「What can you help me with」
-    # 会被吸到这个意图上，然后走知识检索、未命中、返回兜底。用户第一句话问
-    # 「你能做什么」就被告知「知识库里查不到」，是最糟糕的开场。
-    # 这类问题该走 onboarding 流程（它的 description 就写着介绍可办业务）。
+    # This description has to stay narrow. The original Chinese read 「电商通用信息咨询」, and
+    # translating it directly to "General e-commerce questions" widened it a notch — measured,
+    # "What can you help me with" got pulled onto this intent, went to retrieval, missed, and
+    # returned the fallback. A user whose first question is "what can you do" being told "I could
+    # not find that in the knowledge base" is the worst possible opening.
+    # Questions about the assistant's own capabilities are routed to chitchat by an explicit rule
+    # in turn_plan.jinja2.
     "general_ecommerce_info": KnowledgeIntent(
         id="general_ecommerce_info",
         description=("Questions about the merchant's rules or shopping process that do not fit "

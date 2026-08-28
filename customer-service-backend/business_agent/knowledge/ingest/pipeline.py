@@ -1,8 +1,9 @@
 """
-入库流水线：加载 → 切分 → 向量化 → 写索引 + 写元数据
+The ingest pipeline: load -> split -> embed -> write index + write metadata.
 
-支持知识源的新增 / 更新 / 删除，更新后索引同步生效：
-更新走「先按 source_id 删旧分片，再写新分片」，避免留下孤儿向量。
+Sources can be added, updated and deleted, and the index stays in step after an update: an update
+deletes the old chunks by source_id before writing the new ones, so no orphaned vectors are left
+behind.
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from business_agent.repository.knowledge_repository import KnowledgeRepository, 
 
 @dataclass(slots=True)
 class SourceResult:
-  """Goal: 单个知识源的入库结果"""
+  """Goal: the ingest result for one knowledge source."""
   source_id: str
   source_type: str
   name: str
@@ -30,7 +31,7 @@ class SourceResult:
 
 @dataclass(slots=True)
 class IngestReport:
-  """Goal: 一次入库执行的汇总"""
+  """Goal: the summary of one ingest run."""
   results: list[SourceResult] = field(default_factory=list)
   vector_count: int = 0
   embedding_model: str = ""
@@ -54,7 +55,8 @@ class IngestReport:
 
 class IngestPipeline:
   """
-  Goal: 把 knowledge_source/ 下的文档写进 Chroma 索引与 MySQL 元数据表
+  Goal: write the documents under knowledge_source/ into the Chroma index and the MySQL metadata
+        tables
   """
 
   def __init__(self,
@@ -69,11 +71,11 @@ class IngestPipeline:
                    source_ids: list[str] | None = None,
                    force: bool = False) -> IngestReport:
     """
-    Goal: 全量或按知识源 ID 增量入库
+    Goal: ingest everything, or incrementally by source id
     Args:
-        repository: 元数据仓储
-        source_ids: 只入库这些知识源；None 表示全部
-        force: 内容未变化时也重新切分与向量化
+        repository: the metadata repository
+        source_ids: ingest only these sources; None means all of them
+        force: re-split and re-embed even when the content has not changed
     Returns: IngestReport
     """
     report = IngestReport(embedding_model=embedding_model_name())
@@ -109,7 +111,8 @@ class IngestPipeline:
 
   async def delete(self, repository: KnowledgeRepository, source_id: str) -> SourceResult:
     """
-    Goal: 删除一个知识源：索引与元数据一起删，删完检索不到
+    Goal: delete a knowledge source — index and metadata together, so it can no longer be
+          retrieved
     Args:
         repository / source_id
     Returns: SourceResult
@@ -127,10 +130,10 @@ class IngestPipeline:
 
   async def _ingest_one(self, repository: KnowledgeRepository, source: LoadedSource) -> int:
     """
-    Goal: 单个知识源的入库：切分 → 向量化 → 先删后写 → 落元数据
+    Goal: ingest one source: split -> embed -> delete then write -> persist metadata
     Args:
         repository / source
-    Returns: int 写入的分片数
+    Returns: the number of chunks written
     """
     chunks: list[PreparedChunk] = split_source(source)
     if not chunks:
@@ -151,7 +154,8 @@ class IngestPipeline:
       for chunk, vector in zip(chunks, vectors)
     ]
 
-    # 更新语义：先删除该知识源的旧分片，再写入新分片，索引同步生效
+    # Update semantics: delete this source's old chunks first, then write the new ones, so the
+    # index stays in step
     await self._vector_client.delete(source.source_id)
     await self._vector_client.upsert(records)
 
@@ -185,10 +189,11 @@ class IngestPipeline:
 
 async def run_with_repository(handler):
   """
-  Goal: 命令行场景下的资源管理：起 DB 引擎 → 建表 → 交出 repository → 释放
+  Goal: resource management for the CLI: start the DB engine -> create tables -> hand over the
+        repository -> release
   Args:
-      handler: async callable，接收 KnowledgeRepository
-  Returns: handler 的返回值
+      handler: an async callable that receives a KnowledgeRepository
+  Returns: whatever handler returned
   """
   db_client.init_db_engine()
   await ensure_tables(db_client.session_engine)

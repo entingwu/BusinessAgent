@@ -27,35 +27,36 @@ class TurnPlanValidator:
         knowledge_intents:
     """
 
-    # 1. 获取路由后的轨道情况
+    # 1. Which tracks the routing produced
     activate_tracks = turn_plan.activated_tracks()
 
-    # 2. 是否未命中轨道
+    # 2. No track matched
     if not activate_tracks:
       return self._reject(ClarifyReason.MISSING_TRACK)
 
-    # 3. 是否命中多条轨道
+    # 3. More than one track matched
     if len(activate_tracks) > 1:
       return self._reject(ClarifyReason.MULTIPLE_TRACKS)
 
-    # 4. 命中唯一的轨道
+    # 4. Exactly one track matched
     selectd_tracks = activate_tracks[0]
 
-    # 4.1 进入到task轨道校验
+    # 4.1 Validate the task track
     if selectd_tracks == "task":
       return self._validate_task_track(turn_plan.task, flow_list)
 
-    # 4.2 进入到knowledge轨道校验
+    # 4.2 Validate the knowledge track
     if selectd_tracks == "knowledge":
       return self._validate_knowldge_track(turn_plan.knowledge, dialogue_state, knowledge_intents)
 
-    # 4.3 闲聊轨道不校验
+    # 4.3 The chitchat track is not validated
     return TurnPlanValidatedResult(valid=True)
 
 
   def _reject(self, reason: ClarifyReason) -> TurnPlanValidatedResult:
-    # 规划被判非法这条路径此前一行日志都没有：规划成功记了，被拒反而静默。
-    # 而「静默失效」正是上面那类「加了新命令忘了加白名单」的错误唯一会留下的痕迹
+    # The rejection path used to produce no log line at all: a successful plan was recorded and
+    # a rejected one was silent. Yet silent failure is the only trace that the class of mistake
+    # described above — adding a command and forgetting the whitelist — ever leaves.
     logger.warning("turn_plan_rejected reason=%s", reason.value)
     return TurnPlanValidatedResult(valid=False, reason=reason)
 
@@ -80,14 +81,17 @@ class TurnPlanValidator:
 
     # 2. whether command is legit
     #
-    # 这一条当前**永远不会命中**：allowed_commands 与 COMMAND_TO_CLASS 是同一批类，
-    # 合法命令必然是四者之一，非法的在 Command.from_dict 就 KeyError 炸了、到不了这里。
+    # This branch **can never fire today**: allowed_commands and COMMAND_TO_CLASS hold the same
+    # set of classes, so a legal command is necessarily one of the four, and an illegal one blows
+    # up with KeyError inside Command.from_dict long before reaching here.
     #
-    # 保留它是因为它是唯一的类型闸门。但要说清楚它**不是报警**：真有人给
-    # COMMAND_TO_CLASS 加了第五种命令却忘了加进这里，走的是
-    # reject → 澄清兜底话术 → 连续失败攒够转人工，全程不抛错。
-    # 表现是「机器人忽然变笨然后转人工」，而不是任何一处显式失败。
-    # 下面 _reject 里那行 warning 是这条路径目前唯一的信号，别删。
+    # It is kept because it is the only type gate there is. But be clear that it **is not an
+    # alarm**: if someone adds a fifth command to COMMAND_TO_CLASS and forgets to add it here,
+    # the path taken is reject -> clarification fallback -> enough consecutive failures to hand
+    # off to a human, and nothing raises anywhere along it.
+    # What it looks like from outside is "the bot suddenly got dumb and escalated", not an
+    # explicit failure at any one point.
+    # The warning in _reject below is currently this path's only signal — do not remove it.
     allowed_commands = (StartFlowCommand, SetSlotsCommand, CancelFlowCommand, ResumeFlowCommand)
     if not all(isinstance(command, allowed_commands) for command in task.commands):
       return self._reject(ClarifyReason.INVALID_TASK_COMMANDS)
@@ -125,12 +129,14 @@ class TurnPlanValidator:
     if not knowledge.intents:
       return self._reject(ClarifyReason.MISSING_KNOWLEDGE_INTENT)
 
-    # 只校验本轮LLM路由出来的知识意图，不能遍历全量注册表，
-    # 否则任何知识提问都会被 product_info/order_info 的卡片要求拦下来
+    # Only the knowledge intents this turn's routing produced are validated; iterating the whole
+    # registry would let product_info / order_info's card requirement block every knowledge
+    # question.
     for llm_intent in knowledge.intents:
       knowledge_object = knowledge_intents.get(llm_intent)
 
-      # LLM 可能给出注册表里不存在的意图ID，此时按"识别不出意图"处理
+      # The LLM can name an intent id that is not in the registry; treat that as "intent not
+      # recognised"
       if knowledge_object is None:
         return self._reject(ClarifyReason.MISSING_KNOWLEDGE_INTENT)
 

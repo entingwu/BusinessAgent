@@ -11,7 +11,7 @@ def init_http_client():
   Initialize http_client
   """
   global http_client
-  http_client = AsyncClient(timeout=120, trust_env=True) # 不用关心代理
+  http_client = AsyncClient(timeout=120, trust_env=True)  # trust_env=True picks up proxy settings
 
 
 async def disposed_http_client():

@@ -49,7 +49,8 @@ def _build_user_message(chat_request: ChatRequest) -> UserMessage:
 
 def _to_chat_object(focused_object: FocusedObject) -> ChatObject:
     """
-    Goal: 领域模型的业务对象转成 API 模型。object 与 cards 两条路径共用，避免写两份转换
+    Goal: convert a domain business object into its API model. Shared by the object and cards
+          paths so the conversion is not written twice.
     """
     return ChatObject(
         id=focused_object.id,
@@ -61,7 +62,8 @@ def _to_chat_object(focused_object: FocusedObject) -> ChatObject:
 
 def _build_chat_response(process_result: ProcessedResult) -> ChatResponse:
     """
-    Goal: 领域模型转 API 模型。协议见 meta-business-agent.md 附录 E
+    Goal: convert a domain model into its API model. The protocol is appendix E of
+          meta-business-agent.md.
     """
     return ChatResponse(
         message_id=process_result.message_id,
@@ -90,7 +92,8 @@ async def chat_history_endpoint(sender_id: str,
 
 def _build_session_state_response(sender_id: str, state) -> SessionStateResponse:
     """
-    Goal: 领域状态转 API 模型。当前流程可能是业务流程，也可能是系统流程
+    Goal: convert domain state into its API model. The current flow may be a business flow or a
+          system flow.
     """
     task = state.current_task()
     return SessionStateResponse(
@@ -106,7 +109,7 @@ def _build_session_state_response(sender_id: str, state) -> SessionStateResponse
 
 @router.get("/api/session/state", response_model=SessionStateResponse)
 async def session_state_endpoint(sender_id: str, service: DialogueStateServiceDep):
-    """当前流程、步骤、槽位与控制权归属（规范 4.2）"""
+    """Current flow, step, slots and control ownership (spec 4.2)."""
     state = await service.get_session_state(sender_id)
     return _build_session_state_response(sender_id, state)
 
@@ -114,8 +117,8 @@ async def session_state_endpoint(sender_id: str, service: DialogueStateServiceDe
 @router.post("/api/handoff", response_model=SessionStateResponse)
 async def handoff_endpoint(body: HandoffRequest, service: DialogueStateServiceDep):
     """
-    坐席接管（claim）或交还 Agent（release）。
-    第一档只翻转控制权；移交包属于第二档。
+    A human agent claims the session, or releases it back to the Agent.
+    Tier 1 only flips ownership; the handoff package is tier 2.
     """
     state = await service.set_control_owner(body.sender_id, body.action, body.reason)
     return _build_session_state_response(body.sender_id, state)

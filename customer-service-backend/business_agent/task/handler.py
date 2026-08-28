@@ -32,14 +32,14 @@ class TaskHandler:
     Returns:
     """
 
-    # 1. 利用命令[指令]处理器处理对应的命令[指令]
+    # 1. Run the commands through the command processor
     self.command_processor.process_commands(commands, dialogue_state, self.flow_list)
 
-    # 2. 利用流程推进器推荐流程
+    # 2. Advance the flow with the flow executor
     bot_messages = await self.flow_executor.execute_flow(
       dialogue_state, 
       action_runner=self.action_runner, 
       flow_list=self.flow_list)
 
-    # 3. 返回机器人回复的消息
+    # 3. Return the bot's replies
     return bot_messages

@@ -7,24 +7,28 @@ from business_agent.domain.state import DialogueState
 
 class KnowledgeUnavailableError(RuntimeError):
   """
-  Goal: 知识检索链路不可用（向量库或 Embedding 服务挂了）。
-        上层据此回「暂时查不了，帮你转人工」，不得退化为用模型自身知识作答
-        （规范 5.1 / C.4.7，第一档就要实现的降级路径）。
+  Goal: the retrieval stack is unavailable (the vector store or the embedding service is down).
+        Callers answer "cannot look this up right now, let me hand you to a human" and must never
+        fall back to the model's own knowledge (spec 5.1 / C.4.7 — a degraded path required
+        already in tier 1).
   """
 
 
 @dataclass(slots=True)
 class KnowledgeChunk:
   """
-  Goal: 一条检索结果。除正文外带来源标识与相似度，让回复可溯源（规范 5.2）。
+  Goal: one retrieval result. Besides the text it carries provenance and similarity, which is
+        what makes an answer traceable (spec 5.2).
   Attributes:
-      chunk_id: 分片 ID，内部日志按它回溯
-      source_id: 知识源 ID
+      chunk_id: the chunk id; internal logs trace back by it
+      source_id: the knowledge source id
       source_type: faq / document / api
-      source_title: 知识源名称 + 章节名，给人看的来源
-      position: 片段在知识源内的序号
-      score: 余弦相似度。业务接口类分片没有相似度，为 None，视为权威结果不参与阈值过滤
-      provider_id: 哪个 Provider 召回的，溯源落库时要按它区分来路
+      source_title: source name + section name — the human-readable provenance
+      position: the chunk's index within its source
+      score: cosine similarity. Chunks from business APIs have none, so it is None; they count
+          as authoritative and skip threshold filtering
+      provider_id: which provider returned it; traces are written per provider to keep the
+          origins apart
   """
   content: str
   chunk_id: str | None = None
@@ -37,7 +41,8 @@ class KnowledgeChunk:
 
   def citation(self) -> str:
     """
-    Goal: 拼一个人可读的来源串，用于内部日志与提示词里的分片标注
+    Goal: build a human-readable provenance string for internal logs and for the chunk labels in
+          the prompt
     Returns: str
     """
     parts = [part for part in (self.source_title, self.chunk_id) if part]
@@ -45,7 +50,8 @@ class KnowledgeChunk:
 
   def trace(self) -> dict[str, Any]:
     """
-    Goal: 溯源信息。内部记录命中的分片 ID 与相似度（规范 3.1.2 / 5.2）。
+    Goal: trace information — the internal record of hit chunk ids and similarities
+          (spec 3.1.2 / 5.2).
     Returns: dict
     """
     return {

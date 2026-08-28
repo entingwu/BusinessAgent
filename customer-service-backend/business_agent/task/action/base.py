@@ -103,7 +103,7 @@ class Action(ABC):
     that than to produce a key that looks valid while not actually being unique, which is more
     dangerous than having no key at all.
     Args:
-        state: 当前对话状态
+        state: the current dialogue state
     Returns:
         the idempotency key string, or None
     """

@@ -43,7 +43,7 @@ class DialogueRepository:
       Traditional idea: before inserting record, and select based on sender id.
       Save if exists, else updates.
       We can do this at SQL statement.
-      MySQL: advanced SQL for insert and update (唯一值： 主键索引、 唯一索引)
+      MySQL: advanced SQL for insert and update (uniqueness comes from the primary key or a unique index)
       Args: 
           sender_id, 
           dialogue_state

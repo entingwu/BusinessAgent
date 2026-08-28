@@ -14,7 +14,7 @@ from business_agent.observability import configure_logging
 @asynccontextmanager
 async def lifespan(_: FastAPI):
   # 1. Initialize all resources
-  #    日志最先配，否则后面初始化过程中的日志一行都看不见
+  #    Logging is configured first, or none of the log lines from the rest of startup appear
   configure_logging()
   init_db_engine()
   init_http_client()

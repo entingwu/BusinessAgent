@@ -1,19 +1,21 @@
 """
-Token 估算
+Token estimation.
 
-项目不依赖在线 BPE 文件（tiktoken 首次使用要联网下载），这里用一个确定性的
-纯 Python 估算函数。规范要求「分片宁可偏小不可跨节」，所以估算方向刻意偏保守：
-中日韩字符按 1 token 计（实际 qwen 分词通常低于 1），拉丁字符按 4 字符 1 token 计。
+The project does not depend on an online BPE file (tiktoken downloads one on first use), so this
+is a deterministic pure-Python estimate. The spec asks that "a chunk should err on the small side
+rather than span sections", so the estimate deliberately leans conservative: CJK characters count
+as 1 token each (qwen's tokeniser usually gives less), Latin text as 1 token per 4 characters.
 
-入库切分与提示词上下文预算共用这一个函数，两处口径必须一致。
+Ingest-time splitting and the prompt context budget share this one function — the two must measure
+the same way.
 """
 
 _CJK_RANGES = (
-  (0x3400, 0x4DBF),    # CJK 扩展 A
-  (0x4E00, 0x9FFF),    # CJK 基本区
-  (0xF900, 0xFAFF),    # CJK 兼容表意
-  (0x3000, 0x303F),    # 中文标点
-  (0xFF00, 0xFFEF),    # 全角字符
+  (0x3400, 0x4DBF),    # CJK Extension A
+  (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+  (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
+  (0x3000, 0x303F),    # CJK punctuation
+  (0xFF00, 0xFFEF),    # fullwidth forms
 )
 
 
@@ -24,10 +26,10 @@ def _is_cjk(char: str) -> bool:
 
 def estimate_tokens(text: str) -> int:
   """
-  Goal: 估算一段文本的 token 数
+  Goal: estimate the token count of a piece of text
   Args:
-      text: 待估算文本
-  Returns: int 估算的 token 数（下限 0）
+      text: the text to measure
+  Returns: the estimated token count (never below 0)
   """
   if not text:
     return 0

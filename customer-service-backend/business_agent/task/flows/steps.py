@@ -18,8 +18,9 @@ class ResponseDefinition:
   text: str
   mode: str="static"       # generate: llm generation(0-1), rephrase: llm generation based on original object 
   prompt: str | None = None
-  # 快捷回复按钮文案（附录 E）。收集步骤挂上它，用户点一下就把值填回来，
-  # 不必自己敲——这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式
+  # Quick-reply button labels (appendix E). A collect step carrying them lets the user fill the
+  # slot with one tap instead of typing — this is how spec 3.3.3's "quick replies advance the
+  # step" two-round convergence is implemented.
   suggestions: list[str] = field(default_factory=list)
 
 

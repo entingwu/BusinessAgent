@@ -7,14 +7,15 @@ from business_agent.task.action.customer.shared import fetch_logistics
 
 class ActionLookupLogistics(Action):
   name = "action_lookup_logistics"
-  description = "按订单号查询物流公司、运单号、当前进度与轨迹节点"
-  reads = (SlotSpec(name="order_number", description="要查询物流的订单号"),)
+  description = ("Look up the carrier, tracking number, current progress and tracking events "
+                 "for an order")
+  reads = (SlotSpec(name="order_number", description="Order number to track"),)
   writes = ("tracking_number", "logistics_company", "logistics_status", "logistics_traces")
   is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """
-    Goal: 调用获取订单物流信息的接口 并且返回行动的结果对象
+    Goal: call the shipping-info API and return the action result
     Args:
         action_kwargs:
         state:
@@ -22,13 +23,13 @@ class ActionLookupLogistics(Action):
     Returns:
 
     """
-    # 1. 获取请求参数
+    # 1. Read the request parameters
     order_number = state.active_task.slots.get('order_number')
 
-    # 2. 给中台服务发送获取订单状态的请求
+    # 2. Send the request to the commerce service
     payload = await fetch_logistics(order_number)
 
-    # 3. 封装到ActionResult的slots中返回
+    # 3. Wrap the answer into the ActionResult slots
     if payload is None:
         return ActionResult(updated_slots={
             "tracking_number": "unknown",
@@ -40,24 +41,26 @@ class ActionLookupLogistics(Action):
     return ActionResult(updated_slots={
         "tracking_number": payload.get("tracking_number") or "unknown",
         "logistics_company": payload.get("logistics_company") or "unknown",
-        # 中台的 status_desc 本身以句号结尾，而模板也会补一个，直接拼会出现「。。」。
-        # 在写入槽位时统一去掉句尾标点，句号交给模板加
+        # The commerce service's status_desc already ends in a full stop and the template adds
+        # another, so concatenating them produces a doubled stop. Strip the trailing punctuation
+        # when writing the slot and leave the stop to the template.
         "logistics_status": (payload.get("status_desc") or payload.get("status") or "unknown").rstrip("。."),
         "logistics_traces": self._build_traces(payload.get("traces")),
     })
 
-  # 展示的轨迹条数上限：接口按时间倒序返回，取最近的几条即可，
-  # 全量铺开会把一条回复撑成一堵墙
+  # Cap on how many tracking events to show. The API returns them newest first, so the most
+  # recent few are enough — laying all of them out turns one reply into a wall of text.
   MAX_TRACES = 5
 
   def _build_traces(self, traces: Any) -> str:
     """
-    Goal: 把中台返回的物流轨迹节点渲染成可直接展示的多行文本
+    Goal: render the tracking events from the commerce service into ready-to-display lines
     Args:
-        traces: 中台 /orders/{id}/logistics 返回的 data.traces，形如
-                [{"time": "2025-02-20T08:30:00", "desc": "快件已到达..."}, ...]
+        traces: data.traces as returned by the commerce service's /orders/{id}/logistics,
+                shaped like [{"time": "2025-02-20T08:30:00", "desc": "..."}, ...]
     Returns:
-        每行一个节点的字符串；无轨迹时返回空串，由模板决定不展示这一段
+        one event per line; an empty string when there are none, which is how the template knows
+        to omit the section
     """
     if not isinstance(traces, list):
       return ""
@@ -75,8 +78,9 @@ class ActionLookupLogistics(Action):
 
   def _format_time(self, raw: Any) -> str:
     """
-    Goal: 把 ISO 时间压缩成 "02-20 08:30"。年份对物流节点没有信息量，秒也没有。
-          解析不了就原样返回，宁可难看也不要丢掉时间信息
+    Goal: compress an ISO timestamp to "02-20 08:30". The year carries no information for a
+          tracking event, and neither do the seconds.
+          Anything unparseable is returned as-is — better ugly than losing the timestamp.
     """
     if not raw:
       return ""

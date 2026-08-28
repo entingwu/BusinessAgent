@@ -1,11 +1,11 @@
 """
-通过LangChain定义LLM 客户端
-标准写法（PEP8规范）
-# 1. sdk自带的依赖包
+LLM client, defined through LangChain.
+Import order follows PEP 8:
+# 1. standard library
 
-# 2. 第三组件的依赖包
+# 2. third-party packages
 
-# 3. 自己应用的依赖包
+# 3. this application
 """
 import asyncio
 
@@ -27,15 +27,16 @@ llm_client:BaseChatModel = init_chat_model(
 
 class EmbeddingUnavailableError(RuntimeError):
   """
-  Goal: Embedding 服务不可用。上层据此走「暂时查不了，帮你转人工」的降级路径，
-        绝不允许退化成用模型自身知识作答（规范 5.1 / C.4.7）。
+  Goal: the embedding service is unavailable. Callers take the degraded path ("cannot look this
+        up right now, let me hand you to a human") and must never fall back to answering from the
+        model's own knowledge (spec 5.1 / C.4.7).
   """
 
 
-# Embedding 与 LLM 共用 DashScope 凭据（settings.llm_api_key / settings.llm_base_url），
-# 不引入第二套 SDK 与第二份 API Key（规范 C.4.1 第 2 条）。
-# check_embedding_ctx_length=False: DashScope 兼容接口只接受字符串入参，
-# 不接受 OpenAI 客户端默认的 token id 数组。
+# Embedding shares the LLM's DashScope credentials (settings.llm_api_key /
+# settings.llm_base_url); no second SDK and no second API key are introduced (spec C.4.1, rule 2).
+# check_embedding_ctx_length=False: the DashScope-compatible API only accepts strings, not the
+# array of token ids the OpenAI client sends by default.
 embedding_client: OpenAIEmbeddings = OpenAIEmbeddings(
   model=settings.embedding_model,
   api_key=settings.llm_api_key,
@@ -48,7 +49,8 @@ embedding_client: OpenAIEmbeddings = OpenAIEmbeddings(
 
 def embedding_model_name() -> str:
   """
-  Goal: 返回当前 Embedding 模型名。入库与检索共用同一个来源，杜绝两边配不一致。
+  Goal: the current embedding model name. Ingest and retrieval read the same source, so the two
+        cannot drift apart.
   Returns: str
   """
   return settings.embedding_model
@@ -56,24 +58,24 @@ def embedding_model_name() -> str:
 
 async def embed_query(text: str) -> list[float]:
   """
-  Goal: 把一句用户提问向量化（检索侧）
+  Goal: embed one user question (the retrieval side)
   Args:
-      text: 待向量化的文本
-  Returns: list[float] 长度为 settings.embedding_dimensions 的向量
-  Raises: EmbeddingUnavailableError 服务不可用时抛出，交由上层降级
+      text: the text to embed
+  Returns: a list[float] of length settings.embedding_dimensions
+  Raises: EmbeddingUnavailableError when the service is unavailable, for the caller to degrade on
   """
   try:
     return await embedding_client.aembed_query(text)
-  except Exception as error:  # noqa: BLE001 - 任何底层异常都统一收敛成降级信号
+  except Exception as error:  # noqa: BLE001 - every underlying error collapses into one degrade signal
     raise EmbeddingUnavailableError(f"embedding query failed: {error}") from error
 
 
 async def embed_documents(texts: list[str]) -> list[list[float]]:
   """
-  Goal: 批量把知识分片向量化（入库侧）
+  Goal: embed a batch of knowledge chunks (the ingest side)
   Args:
-      texts: 待向量化的分片文本列表
-  Returns: list[list[float]] 与入参一一对应的向量列表
+      texts: the chunk texts to embed
+  Returns: a list[list[float]] matching the inputs one-to-one
   Raises: EmbeddingUnavailableError
   """
   if not texts:
@@ -86,19 +88,19 @@ async def embed_documents(texts: list[str]) -> list[list[float]]:
 
 async def main_test():
   """
-  流式调用: stream: 同步的流式 astream: 异步流式
-  非流失调用: invoke 同步非流式 ainvoke: 异步非流式
+  Streaming: stream (sync), astream (async)
+  Non-streaming: invoke (sync), ainvoke (async)
   Runnable provides Abstract Interface: Define common ways: 
   """
 
-  # ai_message: AIMessage = llm_client.invoke("请你给我讲一个笑话，确保要幽默")
-  chain = llm_client | StrOutputParser() # | LCEL表达式
+  # ai_message: AIMessage = llm_client.invoke("Tell me a joke, and make it funny")
+  chain = llm_client | StrOutputParser()  # | is the LCEL composition operator
   # output=llm_client.invoke(original_input)
   # final_output=StrOutputParser.invoke(output)
-  content = chain.invoke("请你给我讲一个笑话，确保要幽默")
+  content = chain.invoke("Tell me a joke, and make it funny")
   print(content)
 
-  # Embedding 自检：维度必须与 settings.embedding_dimensions 一致
+  # Embedding self-check: the dimensions must match settings.embedding_dimensions
   vector = await embed_query("退货政策是什么")
   print(f"embedding model={embedding_model_name()} dim={len(vector)}")
 

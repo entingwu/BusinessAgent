@@ -13,48 +13,51 @@ class Settings(BaseSettings):
   commerce_api_base_url: str
   database_url: str
   app_host: str
-  app_port: int # APP_PORT=18082 自动转换成int类型
+  app_port: int  # APP_PORT=18082, coerced to int automatically
 
-  # 应用日志级别。有默认值，所以不需要改 .env——不像 RAG 那批必填键，
-  # 缺了它不该让服务起不来
+  # Application log level. It has a default, so .env does not need to change — unlike the RAG
+  # keys below, a missing value here should not stop the service from starting.
   log_level: str = "INFO"
 
-  # 商家自定义的转人工关键词，逗号分隔（规范 3.3.4「命中配置关键词」）。
-  # 有默认值（空）——不配就等于不启用这条触发，不该让服务起不来
+  # The merchant's own handoff keywords, comma-separated (spec 3.3.4, "configured keyword
+  # matched"). It defaults to empty — leaving it unset simply disables that trigger and should
+  # not stop the service from starting.
   handoff_keywords: str = ""
 
-  # ---------------- 知识库 / RAG（选型见 meta-business-agent.md 附录 C.4）----------------
-  # Embedding 与 LLM 同源复用 DashScope 凭据（LLM_API_KEY / LLM_BASE_URL），不引第二套凭据。
-  # 入库与检索必须走同一个模型，因此模型名只在这一处配置。
+  # ---------------- knowledge base / RAG (selection rationale in appendix C.4) ----------------
+  # Embedding reuses the LLM's DashScope credentials (LLM_API_KEY / LLM_BASE_URL); there is no
+  # second set of credentials. Ingest and retrieval must use the same model, so the model name is
+  # configured in exactly this one place.
   embedding_model: str                  # DashScope text-embedding-v3
-  embedding_dimensions: int             # 1024，换模型必须全量重建索引
-  embedding_batch_size: int             # DashScope 兼容接口单次最多 10 条
+  embedding_dimensions: int             # 1024; changing models forces a full reindex
+  embedding_batch_size: int             # the DashScope-compatible API accepts at most 10 per call
 
-  vector_store_dir: str                 # Chroma 本地持久化目录（相对路径按 PROJECT_DIR 解析）
-  vector_collection_name: str           # Chroma collection 名
+  vector_store_dir: str                 # Chroma persistence directory (relative paths resolve against PROJECT_DIR)
+  vector_collection_name: str           # Chroma collection name
 
-  knowledge_source_dir: str             # 知识源文档目录（相对路径按 PROJECT_DIR 解析）
-  knowledge_chunk_size: int             # 分片大小，单位 token（估算），规范默认 500–800
-  knowledge_chunk_overlap: int          # 重叠长度，单位 token（估算），规范默认 80–150
-  knowledge_top_k: int                  # 检索 Top-K
-  knowledge_score_threshold: float      # 余弦相似度阈值，低于视为未命中
-  knowledge_context_max_tokens: int     # 拼进提示词的分片总长上限
+  knowledge_source_dir: str             # knowledge source directory (relative paths resolve against PROJECT_DIR)
+  knowledge_chunk_size: int             # chunk size in estimated tokens; spec default 500-800
+  knowledge_chunk_overlap: int          # overlap in estimated tokens; spec default 80-150
+  knowledge_top_k: int                  # retrieval Top-K
+  knowledge_score_threshold: float      # cosine similarity threshold; below it counts as a miss
+  knowledge_context_max_tokens: int     # cap on the total length of chunks put into the prompt
 
-  knowledge_log_level: str              # knowledge 包的日志级别，检索溯源日志靠它输出
-  knowledge_trace_enabled: bool         # 是否把每轮命中的分片与相似度落到 retrieval_traces 表
+  knowledge_log_level: str              # log level for the knowledge package; retrieval traces depend on it
+  knowledge_trace_enabled: bool         # whether to write each turn's hits and similarities to retrieval_traces
 
   model_config= SettingsConfigDict(env_file=ENV_FILE_PATH, env_file_encoding="utf-8")
 
   def resolved_vector_store_dir(self) -> Path:
     """
-    Goal: 把 VECTOR_STORE_DIR 解析成绝对路径（相对路径以 customer-service-backend 为基准）
+    Goal: resolve VECTOR_STORE_DIR to an absolute path (relative paths are based on
+          customer-service-backend)
     Returns: Path
     """
     return self._resolve(self.vector_store_dir)
 
   def resolved_knowledge_source_dir(self) -> Path:
     """
-    Goal: 把 KNOWLEDGE_SOURCE_DIR 解析成绝对路径
+    Goal: resolve KNOWLEDGE_SOURCE_DIR to an absolute path
     Returns: Path
     """
     return self._resolve(self.knowledge_source_dir)

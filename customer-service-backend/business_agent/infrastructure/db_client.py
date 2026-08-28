@@ -16,7 +16,7 @@ session_factory: async_sessionmaker[AsyncSession] | None = None
 def init_db_engine():
   global session_engine, session_factory
 
-  session_engine = create_async_engine(url=settings.database_url, echo=True) # echo=True: 控制台显示SQL语句的执行
+  session_engine = create_async_engine(url=settings.database_url, echo=True)  # echo=True prints the SQL being executed
 
   session_factory = async_sessionmaker(session_engine, expire_on_commit=False)  # expire_on_commit=True/False
 
@@ -28,7 +28,7 @@ async def main_test():
 
   async with session_factory() as session:
     cursor = await session.execute(text("select 1"))
-    print(cursor.mappings().fetchone()) # 元组：索引取元组中的元素 {'1': 1} 字典：方便根据列名来获取
+    print(cursor.mappings().fetchone())  # mappings() gives dict rows, keyed by column name, instead of tuples
 
   await dispose_engine()
 

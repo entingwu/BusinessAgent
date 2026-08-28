@@ -16,31 +16,34 @@ class Product(Base):
   title: Mapped[str] = mapped_column(String(255))
 
 db_engine = create_async_engine(url=settings.database_url, echo=True)
-# 在提交数据库事务之后，依然保留内存中已查询出来的对象数据
-# 改成 True 再跑一次，第 3 步会重新发 SELECT（在已关闭的事务里触发懒加载）
+# Keep already-loaded objects usable in memory after the transaction commits.
+# Flip this to True and run again: step 3 issues a fresh SELECT, triggering a lazy load inside a
+# transaction that has already closed.
 session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
 
 async def prepare_table():
-  """建表 + 造一条测试数据，保证 demo() 能查到 id=1 的商品"""
+  """Create the table and one row, so demo() has a product with id=1 to find."""
   async with db_engine.begin() as conn:
     await conn.run_sync(Base.metadata.create_all)
 
   async with session_factory() as session:
     product = await session.get(Product, 1)
     if product is None:
-      session.add(Product(id=1, title="机械键盘"))
+      session.add(Product(id=1, title="Mechanical keyboard"))
       await session.commit()
 
 async def demo():
-  # async_sessionmaker 是工厂，要先调用它拿到 AsyncSession 再进上下文管理器
+  # async_sessionmaker is a factory: call it to get an AsyncSession before entering the context
+  # manager
   async with session_factory() as session:
-     # 1. 异步查出一个商品对象
+     # 1. Load one product asynchronously
      product = await session.get(Product, 1)
      print(f"First time read {product.title}")
-     # 2. 提交事务
+     # 2. Commit the transaction
      await session.commit()
-     # 3. 再次尝试读取属性
-     # expire_on_commit=True 时：底层会用异步连接重新查询数据库，获取对象最新的值
+     # 3. Read an attribute again
+     # With expire_on_commit=True the driver re-queries the database over the async connection
+     # to get the object's current values
      print(f"Second time read {product.title}")
 
 async def main():
@@ -48,7 +51,7 @@ async def main():
     await prepare_table()
     await demo()
   finally:
-    # dispose 要放在 session 上下文之外，且保证一定执行
+    # dispose() must sit outside the session context and must always run
     await db_engine.dispose()
 
 

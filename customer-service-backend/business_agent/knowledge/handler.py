@@ -23,40 +23,41 @@ class KnowledgeHandler:
   async def handle(self,
                    state: DialogueState,
                    intents: list[str]) -> list[BotMessage]:
-    # 1. 根据知识意图查询提供者ID
+    # 1. Resolve provider ids from the knowledge intents
     provider_ids = self._get_provider_ids_by_intents(intents)
 
     chunks: list[KnowledgeChunk] = []
-    # 2. 根据提供者ID，查询提供这对象(Provider)
+    # 2. Resolve the Provider objects from those ids
     for provider_id in provider_ids:
         provider = self.knowledge_register.get_provider_by_id(provider_id)
 
-        # 3. 调用提供者的检索方法 获取到各个提供者提供的内容
+        # 3. Call each provider's retrieval method and collect what it returns
         try:
             chunk = await provider.retrival(state)
         except KnowledgeUnavailableError as error:
-            # 向量库或 Embedding 服务不可用：直接降级为「暂时查不了，帮你转人工」，
-            # 绝不允许继续往下走、让 LLM 用自身知识把答案编出来（规范 5.1 / C.4.7）
+            # The vector store or embedding service is unavailable: degrade straight to
+            # "cannot look this up, let me hand you to a human". Carrying on and letting the LLM
+            # invent an answer from its own knowledge is never allowed (spec 5.1 / C.4.7).
             logger.warning("knowledge_provider_unavailable provider_id=%s error=%s", provider_id, error)
             return await self.knowledge_responder.respond_unavailable(
                 state, provider_ids=provider_ids, error=f"{provider_id}: {error}")
 
         chunks.extend(chunk)
 
-    # 4. 将从所有提供者查询获取到的结果给responder组件用
-    #    responder 负责排序、Top-K、上下文截断与未命中兜底
+    # 4. Hand everything the providers returned to the responder, which does the sorting,
+    #    Top-K, context trimming and miss fallback
     messages = await self.knowledge_responder.respond(chunks, state, provider_ids=provider_ids)
-    # 5. 封装数据结果返回
+    # 5. Wrap the result and return
     return messages
 
   def _get_provider_ids_by_intents(self, intents: list[str]) -> list[str]:
     """
-    根据知识意图查询提供者ID
+    Resolve provider ids from knowledge intents.
     """
     provider_ids = []
     for intent_id in intents:
         knowledge_intent = self.knowledge_intents[intent_id]
         provider_ids.extend(knowledge_intent.provider_ids)
 
-    # 排序保证 Provider 调用顺序稳定，便于回读日志比对
+    # Sorting keeps the provider call order stable, which makes logs comparable when read back
     return sorted(set(provider_ids))

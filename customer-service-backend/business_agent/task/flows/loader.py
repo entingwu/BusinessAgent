@@ -33,13 +33,13 @@ class FlowLoader:
     with open(path, 'r', encoding='utf-8') as f:
       yaml_dict: dict[str, Any] = yaml.safe_load(f.read())
 
-    # 2. 加载slots
+    # 2. Load the slots
     loaded_slots = self._load_slots(yaml_dict.get('slots', {}))
 
-    # 3. 加载flows
+    # 3. Load the flows
     loaded_flows = self._load_flows(yaml_dict['flows'], loaded_slots)
 
-    # 4. 构建FlowsList
+    # 4. Build the FlowList
 
     return FlowList(slots=loaded_slots, flows=loaded_flows)
 

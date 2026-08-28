@@ -6,20 +6,20 @@ from business_agent.task.action.customer.shared import fetch_order
 
 class ActionLookupOrderStatus(Action):
   name = "action_lookup_order_status"
-  description = "按订单号查询订单状态与金额、商品明细"
-  reads = (SlotSpec(name="order_number", description="要查询的订单号"),)
+  description = "Look up an order's status, amount and line items by order number"
+  reads = (SlotSpec(name="order_number", description="Order number to look up"),)
   writes = ("order_status", "order_summary")
-  # 只读查询，不改变中台任何状态
+  # A read-only query; it changes nothing in the commerce service
   is_write = False
 
   async def run(self, action_kwargs: dict[str, Any], state: DialogueState) -> ActionResult:
     """
-    Goal: 调用获取订单信息的接口，并且返回行动的结果对象
+    Goal: call the order-info API and return the action result
     """
-    # 1. 获取请求参数
+    # 1. Read the request parameters
     order_number = state.active_task.slots.get('order_number')
 
-    # 2. 给中台服务发送获取订单状态的请求
+    # 2. Send the request to the commerce service
     payload = await fetch_order(order_number)
 
     if payload is None:
@@ -28,10 +28,10 @@ class ActionLookupOrderStatus(Action):
         "order_summary": "I could not retrieve this order right now."
       })
 
-    # 3. 封装到ActionResult的slots中返回
+    # 3. Wrap the answer into the ActionResult slots
     return ActionResult(updated_slots={
-      # 与 lookup_logistics 同样的处理：中台的 status_desc 自带句号，
-      # 而 YAML 模板也会补一个，直接拼会出现「派往目的地。。」
+      # Same treatment as lookup_logistics: the commerce service's status_desc already ends in a
+      # full stop and the YAML template adds another, so concatenating them doubles it.
       "order_status": (payload.get("status_desc") or payload.get("status") or "unknown").rstrip("。."),
       "order_summary": self._build_order_summary(payload),
     })
@@ -47,7 +47,8 @@ class ActionLookupOrderStatus(Action):
                 for item in items[:2] if item.get("title")]
       if titles:
         parts.append("Items: " + ", ".join(titles))
-    # 中文行文统一用全角标点，原来用 ASCII 的 "." 和 "," 拼出来是
-    # 「订单金额 ￥899.00.商品: 耳机.」这种半中半英的样子
+    # The Chinese values from the commerce service use fullwidth punctuation, so joining them
+    # with ASCII "." and "," produced the half-and-half look of
+    # 「订单金额 ￥899.00.商品: 耳机.」
     return "，".join(parts) + "。" if parts else ""
     

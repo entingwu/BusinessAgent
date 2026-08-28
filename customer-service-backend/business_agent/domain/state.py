@@ -80,12 +80,12 @@ class DialogueState:
   focused_object:FocusedObject | None = None                           # Card info
   pending_turn: Turn | None = None
 
-  # ---- 人工接管（规范 3.3.4 第一档）----
-  control_owner: ControlOwner = ControlOwner.AGENT                     # 会话控制权归属
-  handoff_trigger: HandoffTrigger | None = None                        # 转人工的原因，供第二档移交包用
-  handoff_reason: str = ""                                             # 原因的可读说明
-  consecutive_clarify: int = 0                                         # 连续澄清失败计数
-  consecutive_knowledge_miss: int = 0                                  # 连续知识检索未命中计数
+  # ---- human handoff (spec 3.3.4, tier 1) ----
+  control_owner: ControlOwner = ControlOwner.AGENT                     # who owns the session
+  handoff_trigger: HandoffTrigger | None = None                        # why it escalated; tier 2's handoff package needs it
+  handoff_reason: str = ""                                             # human-readable explanation of the reason
+  consecutive_clarify: int = 0                                         # consecutive clarification failures
+  consecutive_knowledge_miss: int = 0                                  # consecutive retrieval misses
 
   def to_dict(self) -> dict[str, Any]:
     return {
@@ -116,7 +116,8 @@ class DialogueState:
       sessions=[Session.from_dict(session_dict) for session_dict in data['sessions']],
       current_session_id=data['current_session_id'],
       pending_turn=Turn.from_dict(data['pending_turn']) if data['pending_turn'] is not None else None,
-      # 加字段前落库的状态没有这几个键，用 .get 兜住，否则老会话一读就 KeyError
+      # State persisted before these fields existed does not have these keys, so .get() guards
+      # the read — otherwise loading an old session raises KeyError
       control_owner=ControlOwner.coerce(data.get('control_owner')),
       handoff_trigger=HandoffTrigger(data['handoff_trigger']) if data.get('handoff_trigger') else None,
       handoff_reason=data.get('handoff_reason') or "",
@@ -204,7 +205,7 @@ class DialogueState:
 
   def current_task(self):
     """
-    Caller: 流程推进器使用
+    Caller: the flow executor
     Goal: Return the task context, can be system context, or business task context. Can be None.
     1. business flow task context
     2. system flow task context
@@ -225,7 +226,7 @@ class DialogueState:
 
   def remove_slot(self, slot_name: str):
     if self.active_task is not None:
-      # 槽位可能已经不存在（例如重复清理），用默认值避免 KeyError
+      # The slot may already be gone (a repeated cleanup, say), so use a default to avoid KeyError
       self.active_task.slots.pop(slot_name, None)
 
 ########################################### Dialog related methods ###########################################
@@ -279,9 +280,9 @@ class DialogueState:
     # 3. buffer 
     self.pending_turn = None
 
-    # 4. 控制权：新会话一律从 Agent 重新开始。
-    #    上一通会话的人工接管状态不该跨会话粘住——隔了一小时再来的
-    #    是一次新咨询，不是上次那位坐席还在接着
+    # 4. Ownership: a new session always starts back with the Agent.
+    #    A takeover from the previous session must not stick across sessions — someone returning
+    #    an hour later is starting a new enquiry, not continuing with the same agent.
     self.control_owner = ControlOwner.AGENT
     self.handoff_trigger = None
     self.handoff_reason = ""
@@ -321,10 +322,12 @@ class DialogueState:
 
   def request_handoff(self, trigger: HandoffTrigger, reason: str):
     """
-    Goal: 转入排队等人工。Agent 在 PENDING_HUMAN 下仍然应答——
-          坐席可能几分钟才接进来，这期间把用户晾着比继续兜底更糟
+    Goal: move into the queue for a human. The Agent keeps answering while PENDING_HUMAN — a
+          human may take minutes to join, and leaving the user in silence meanwhile is worse than
+          continuing to cover.
     """
-    # 已经是人工在处理了就别往回退，否则坐席接手后用户再说句「投诉」会把状态打回排队
+    # Do not step backwards once a human is handling it, or one more 「投诉」 from the user after
+    # the agent joined would push the session back into the queue
     if self.control_owner is ControlOwner.HUMAN:
       return
     self.control_owner = ControlOwner.PENDING_HUMAN
@@ -333,7 +336,7 @@ class DialogueState:
 
   def claim_by_human(self, reason: str = ""):
     """
-    Goal: 坐席接管。此后 Agent 不再自动应答
+    Goal: a human claims the session. The Agent stops answering automatically from here on.
     """
     self.control_owner = ControlOwner.HUMAN
     if self.handoff_trigger is None:
@@ -343,8 +346,8 @@ class DialogueState:
 
   def release_to_agent(self):
     """
-    Goal: 交还给 Agent。计数器一并清零，否则刚回交就会因为
-          之前累积的失败次数立刻又被踢回人工
+    Goal: hand control back to the Agent. The counters are reset too, or the accumulated failure
+          count from before would kick it straight back to a human the moment it returns.
     """
     self.control_owner = ControlOwner.AGENT
     self.handoff_trigger = None
@@ -357,14 +360,15 @@ class DialogueState:
 
   def note_clarify(self, happened: bool):
     """
-    Goal: 记一次澄清结果。成功识别意图就清零——连续性是这个信号的全部意义，
-          累计总数说明不了 Agent 现在处理不了
+    Goal: record one clarification outcome. Recognising the intent resets it — consecutiveness is
+          the entire point of this signal, and a lifetime total says nothing about whether the
+          Agent is stuck right now.
     """
     self.consecutive_clarify = self.consecutive_clarify + 1 if happened else 0
 
   def note_knowledge_miss(self, missed: bool):
     """
-    Goal: 记一次知识检索命中与否。语义同 note_clarify
+    Goal: record whether one retrieval hit. Same semantics as note_clarify.
     """
     self.consecutive_knowledge_miss = self.consecutive_knowledge_miss + 1 if missed else 0
 

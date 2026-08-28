@@ -1,5 +1,5 @@
 """
-知识入库命令行
+Knowledge ingest command line.
 
     uv run python -m business_agent.knowledge.ingest ingest [--source-id X] [--force]
     uv run python -m business_agent.knowledge.ingest list
@@ -8,8 +8,9 @@
     uv run python -m business_agent.knowledge.ingest calibrate [--file path.jsonl]
     uv run python -m business_agent.knowledge.ingest stats
 
-query 与 calibrate 是规范 C.1 说的「单条测试接口」：调阈值与切分粒度时用它，
-省下的调试时间超过写它的成本。
+query and calibrate are the "single-shot test interface" spec C.1 asks for: they are what you
+use when tuning the threshold and the chunk granularity, and the debugging time they save is more
+than what they cost to write.
 """
 import argparse
 import asyncio
@@ -80,7 +81,7 @@ async def _cmd_stats(_args) -> None:
 
 
 async def _cmd_traces(args) -> None:
-  """Goal: 回读某个用户最近几轮的检索溯源记录（retrieval_traces）"""
+  """Goal: read back the retrieval traces (retrieval_traces) for a user's recent turns."""
 
   async def handler(repository: KnowledgeRepository):
     return await repository.list_retrieval_traces(args.sender_id, limit=args.limit)
@@ -101,13 +102,14 @@ async def _cmd_query(args) -> None:
   retriever = KnowledgeRetriever(top_k=args.top_k, score_threshold=args.threshold)
   source_types = tuple(args.source_type) if args.source_type else None
 
-  # 阈值设为 -1 时不过滤，用来观察「未命中问题的最高相似度到底是多少」
+  # A threshold of -1 disables filtering, which is how you see what the top similarity of a
+  # missing question actually is
   chunks = await retriever.retrieve(args.text, source_types=source_types)
   print(f"query={args.text!r} source_types={source_types} "
         f"top_k={args.top_k or settings.knowledge_top_k} "
         f"threshold={args.threshold if args.threshold is not None else settings.knowledge_score_threshold}")
   if not chunks:
-    print("  -> 未命中（responder 会走兜底话术）")
+    print("  -> miss (the responder will use the fallback text)")
     return
   for chunk in chunks:
     print(f"  score={chunk.score:.4f}  chunk_id={chunk.chunk_id}  title={chunk.source_title}")
@@ -116,14 +118,15 @@ async def _cmd_query(args) -> None:
 
 async def _cmd_calibrate(args) -> None:
   """
-  Goal: 阈值校准（规范 C.4.6）
-        用例集里 expect=hit 的那批取最低的最高相似度，expect=miss 的那批取最高的最高相似度，
-        阈值落在两者之间。两个区间重叠说明切分有问题，应先改切分而不是改阈值。
+  Goal: threshold calibration (spec C.4.6).
+        Take the lowest top-similarity among the expect=hit cases and the highest top-similarity
+        among the expect=miss cases; the threshold goes between them. If the two ranges overlap,
+        the splitting is what is wrong — fix that before touching the threshold.
   """
   path = Path(args.file) if args.file else DEFAULT_CALIBRATION_FILE
   cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
-  # 校准阶段关掉阈值过滤，直接看原始相似度分布
+  # Calibration turns threshold filtering off so the raw similarity distribution is visible
   retriever = KnowledgeRetriever(top_k=args.top_k, score_threshold=-1.0)
 
   hit_tops: list[tuple[float, str]] = []
@@ -139,81 +142,86 @@ async def _cmd_calibrate(args) -> None:
     bucket.append((top_score, question))
     print(f"{expect:5s} top={top_score:.4f} chunk={top_chunk:28s} {question}")
 
-  print("\n---- 校准结论 ----")
+  print("\n---- calibration result ----")
   if hit_tops:
     lowest_hit = min(hit_tops)
-    print(f"有答案用例 {len(hit_tops)} 条，最高相似度的最小值 = {lowest_hit[0]:.4f}  ({lowest_hit[1]})")
+    print(f"{len(hit_tops)} answerable cases, lowest top-similarity = {lowest_hit[0]:.4f}  ({lowest_hit[1]})")
   if miss_tops:
     highest_miss = max(miss_tops)
-    print(f"无答案用例 {len(miss_tops)} 条，最高相似度的最大值 = {highest_miss[0]:.4f}  ({highest_miss[1]})")
+    print(f"{len(miss_tops)} unanswerable cases, highest top-similarity = {highest_miss[0]:.4f}  ({highest_miss[1]})")
 
   if hit_tops and miss_tops:
     low = min(hit_tops)[0]
     high = max(miss_tops)[0]
     if low > high:
-      print(f"两个区间不重叠，阈值可取 ({high:.4f}, {low:.4f}) 之间，建议取中点 {(low + high) / 2:.4f}")
+      print(f"the ranges do not overlap; any threshold in ({high:.4f}, {low:.4f}) works, "
+            f"midpoint {(low + high) / 2:.4f} recommended")
     else:
-      print("两个区间重叠。按规范 C.4.6 应先查切分粒度；若换过切分方案仍只剩少数离群点，")
-      print("说明是 Embedding 对短问句的表面相似，此时取「去掉离群点后的可分区间」，")
-      print("剩余误通过交给提示词的第二道防线（片段与问题对不上就走兜底话术）。")
+      print("the ranges overlap. Per spec C.4.6, check chunk granularity first; if only a few")
+      print("outliers remain after trying another splitting scheme, that is the embedding model")
+      print("reading short questions as superficially similar. In that case take the separable")
+      print("range with the outliers removed, and leave the remaining false passes to the")
+      print("prompt's second line of defence (chunks that do not match the question fall back).")
       sorted_miss = sorted(miss_tops, reverse=True)
-      # 逐个剥离最高的 miss，找出第一个能与 hit 区间分开的位置
+      # Strip the highest miss one at a time, looking for the first point that separates cleanly
+      # from the hit range
       for outlier_count in range(1, len(sorted_miss)):
         remaining_high = sorted_miss[outlier_count][0]
         if low > remaining_high:
-          print(f"剥离 {outlier_count} 个离群 miss 后：可分区间 ({remaining_high:.4f}, {low:.4f})，"
-                f"中点 {(low + remaining_high) / 2:.4f}")
-          print(f"  离群点：{[(round(score, 4), question) for score, question in sorted_miss[:outlier_count]]}")
+          print(f"after removing {outlier_count} outlier miss case(s): separable range "
+                f"({remaining_high:.4f}, {low:.4f}), midpoint {(low + remaining_high) / 2:.4f}")
+          print(f"  outliers: {[(round(score, 4), question) for score, question in sorted_miss[:outlier_count]]}")
           break
 
-  # 用当前配置的阈值算一遍实际判定，这才是上线值的真实表现
+  # Re-run the verdicts with the configured threshold — this is how the shipped value actually
+  # behaves
   threshold = settings.knowledge_score_threshold
   hit_pass = [item for item in hit_tops if item[0] >= threshold]
   miss_pass = [item for item in miss_tops if item[0] >= threshold]
-  print(f"\n当前配置 KNOWLEDGE_SCORE_THRESHOLD={threshold}")
-  print(f"  有答案用例召回：{len(hit_pass)}/{len(hit_tops)}")
-  print(f"  无答案用例正确兜底：{len(miss_tops) - len(miss_pass)}/{len(miss_tops)}")
+  print(f"\nconfigured KNOWLEDGE_SCORE_THRESHOLD={threshold}")
+  print(f"  answerable cases recalled: {len(hit_pass)}/{len(hit_tops)}")
+  print(f"  unanswerable cases correctly falling back: {len(miss_tops) - len(miss_pass)}/{len(miss_tops)}")
   if miss_pass:
-    print(f"  误通过（依赖提示词兜底）：{[(round(score, 4), question) for score, question in miss_pass]}")
+    print(f"  false passes (left to the prompt fallback): {[(round(score, 4), question) for score, question in miss_pass]}")
   if len(hit_pass) < len(hit_tops):
     missed = [item for item in hit_tops if item[0] < threshold]
-    print(f"  被阈值挡掉的有答案用例：{[(round(score, 4), question) for score, question in missed]}")
+    print(f"  answerable cases blocked by the threshold: {[(round(score, 4), question) for score, question in missed]}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(prog="python -m business_agent.knowledge.ingest", description="知识入库与检索调试")
-  parser.add_argument("--verbose", action="store_true", help="打印检索日志")
+  parser = argparse.ArgumentParser(prog="python -m business_agent.knowledge.ingest", description="Knowledge ingest and retrieval debugging")
+  parser.add_argument("--verbose", action="store_true", help="print retrieval logs")
   subparsers = parser.add_subparsers(dest="command", required=True)
 
-  ingest_parser = subparsers.add_parser("ingest", help="加载 → 切分 → 向量化 → 写索引")
-  ingest_parser.add_argument("--source-id", action="append", help="只入库指定知识源，可重复")
-  ingest_parser.add_argument("--force", action="store_true", help="内容未变化也重新入库")
+  ingest_parser = subparsers.add_parser("ingest", help="load -> split -> embed -> index")
+  ingest_parser.add_argument("--source-id", action="append", help="ingest only these sources; repeatable")
+  ingest_parser.add_argument("--force", action="store_true", help="re-ingest even when the content has not changed")
   ingest_parser.set_defaults(func=_cmd_ingest)
 
-  delete_parser = subparsers.add_parser("delete", help="删除一个知识源（索引与元数据一起删）")
+  delete_parser = subparsers.add_parser("delete", help="delete a knowledge source (index and metadata together)")
   delete_parser.add_argument("--source-id", required=True)
   delete_parser.set_defaults(func=_cmd_delete)
 
-  list_parser = subparsers.add_parser("list", help="列出已入库的知识源")
+  list_parser = subparsers.add_parser("list", help="list the ingested knowledge sources")
   list_parser.set_defaults(func=_cmd_list)
 
-  stats_parser = subparsers.add_parser("stats", help="索引与配置概览")
+  stats_parser = subparsers.add_parser("stats", help="index and configuration overview")
   stats_parser.set_defaults(func=_cmd_stats)
 
-  query_parser = subparsers.add_parser("query", help="单条检索测试")
+  query_parser = subparsers.add_parser("query", help="single-shot retrieval test")
   query_parser.add_argument("--text", required=True)
   query_parser.add_argument("--top-k", type=int, default=None)
   query_parser.add_argument("--threshold", type=float, default=None)
-  query_parser.add_argument("--source-type", action="append", help="metadata 过滤：faq / document，可重复")
+  query_parser.add_argument("--source-type", action="append", help="metadata filter: faq / document; repeatable")
   query_parser.set_defaults(func=_cmd_query)
 
-  traces_parser = subparsers.add_parser("traces", help="回读检索溯源记录（retrieval_traces）")
+  traces_parser = subparsers.add_parser("traces", help="read back retrieval traces (retrieval_traces)")
   traces_parser.add_argument("--sender-id", required=True)
   traces_parser.add_argument("--limit", type=int, default=50)
   traces_parser.set_defaults(func=_cmd_traces)
 
-  calibrate_parser = subparsers.add_parser("calibrate", help="用样本集校准相似度阈值")
-  calibrate_parser.add_argument("--file", default=None, help=f"用例集 JSONL，默认 {DEFAULT_CALIBRATION_FILE}")
+  calibrate_parser = subparsers.add_parser("calibrate", help="calibrate the similarity threshold against a sample set")
+  calibrate_parser.add_argument("--file", default=None, help=f"case-set JSONL; defaults to {DEFAULT_CALIBRATION_FILE}")
   calibrate_parser.add_argument("--top-k", type=int, default=5)
   calibrate_parser.set_defaults(func=_cmd_calibrate)
 

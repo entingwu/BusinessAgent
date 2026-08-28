@@ -8,7 +8,7 @@ from business_agent.infrastructure import http_client
 from business_agent.knowledge.provider.provider import KnowledgeChunk, Provider
 from business_agent.knowledge.provider.rag import VectorKnowledgeProvider
 
-# 知识源类型（与 knowledge/ingest/loader.py 的 SOURCE_TYPE_* 保持一致）
+# Knowledge source types (kept in step with SOURCE_TYPE_* in knowledge/ingest/loader.py)
 SOURCE_TYPE_FAQ = "faq"
 SOURCE_TYPE_DOCUMENT = "document"
 SOURCE_TYPE_API = "api"
@@ -16,7 +16,8 @@ SOURCE_TYPE_API = "api"
 
 def _base_url() -> str:
   """
-  Goal: 获取中台服务地址（去掉末尾斜杠，避免拼出 //orders 这类路径）
+  Goal: the commerce service base URL, with any trailing slash removed so paths like //orders
+        cannot be built
   """
   return settings.commerce_api_base_url.rstrip("/")
 
@@ -26,7 +27,7 @@ class ApiOrderProvider(Provider):
 
   async def retrival(self, state: DialogueState) -> list[KnowledgeChunk]:
     """
-    调用订单接口，将查询到该接口的数据封装到知识检索结果对象的content中.
+    Call the order API and wrap what it returns into the content of a knowledge chunk.
     Args:
         state
     Returns:
@@ -41,7 +42,7 @@ class ApiOrderProvider(Provider):
 
     return [
         KnowledgeChunk(
-            content="订单与物流信息：\n"
+            content="Order and shipping information:\n"
                     + json.dumps(
                 {
                     "order_number": order_number,
@@ -51,11 +52,12 @@ class ApiOrderProvider(Provider):
                 ensure_ascii=False,
                 indent=2,
             ),
-            # 实时数据来自业务接口，是权威结果：不参与相似度阈值过滤（规范 3.1.1 / 验收标准 4）
+            # Live data from a business API is authoritative: it never takes part in
+            # similarity-threshold filtering (spec 3.1.1 / acceptance criterion 4)
             chunk_id=f"api.order:{order_number}",
             source_id="api.order",
             source_type=SOURCE_TYPE_API,
-            source_title=f"订单接口 {order_number}",
+            source_title=f"order API {order_number}",
             position=0,
             provider_id="api.order",
         )
@@ -77,7 +79,7 @@ class ApiProductProvider(Provider):
 
   async def retrival(self, state: DialogueState) -> list[KnowledgeChunk]:
     """
-    调用订单接口，将查询到该接口的数据封装到知识检索结果对象的content中.
+    Call the product API and wrap what it returns into the content of a knowledge chunk.
     Args:
         state
     Returns:
@@ -86,12 +88,13 @@ class ApiProductProvider(Provider):
     data: dict[str, Any] = await self._get_product_info_by_id(product_id)
     text = json.dumps(data, ensure_ascii=False, indent=2)
     return [KnowledgeChunk(
-        content=f"商品信息:\n{text}",
-        # 价格与库存等易变数据只能来自接口，不入知识库（规范 3.1.1）
+        content=f"Product information:\n{text}",
+        # Volatile data such as price and stock may only come from the API, never the knowledge
+        # base (spec 3.1.1)
         chunk_id=f"api.product:{product_id}",
         source_id="api.product",
         source_type=SOURCE_TYPE_API,
-        source_title=f"商品接口 {product_id}",
+        source_title=f"product API {product_id}",
         position=0,
         provider_id="api.product",
     )]
@@ -104,8 +107,9 @@ class ApiProductProvider(Provider):
 
 class RagDefaultProvider(VectorKnowledgeProvider):
   """
-  Goal: 商家文档知识检索（退货 / 退款 / 配送 / 平台规则等政策文档）
-        向量 Top-K + 阈值 + metadata 过滤，未命中返回空列表，兜底话术由 responder 决定。
+  Goal: retrieval over the merchant's documents (returns, refunds, shipping, platform rules and
+        other policy documents). Vector Top-K + threshold + metadata filter; a miss returns an
+        empty list, and the fallback wording is the responder's decision.
   """
   provider_id = "rag.default"
   source_types = (SOURCE_TYPE_DOCUMENT,)
@@ -113,7 +117,8 @@ class RagDefaultProvider(VectorKnowledgeProvider):
 
 class FaqDefaultProvider(VectorKnowledgeProvider):
   """
-  Goal: FAQ 条目检索。FAQ 一条一片入库，命中的就是完整问答对。
+  Goal: FAQ entry retrieval. FAQs are ingested one entry per chunk, so a hit is already a
+        complete question-and-answer pair.
   """
   provider_id = "faq.default"
   source_types = (SOURCE_TYPE_FAQ,)

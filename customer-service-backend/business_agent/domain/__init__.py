@@ -1,7 +1,7 @@
 """
-domain包中未来会创建三个.py模块
-1. messages.py: 封装消息相关的数据模型
-2. context.py: 封装上下文相关的数据模型
-3. state.py 封装对话状态相关的数据模型
+The domain package holds three modules:
+1. messages.py — data models for messages
+2. contexts.py — data models for flow contexts
+3. state.py — data models for dialogue state
 
 """
