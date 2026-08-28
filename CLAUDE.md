@@ -99,6 +99,43 @@ npm install && npm run dev                    # http://127.0.0.1:5174
 
 5. **The three knowledge tables create themselves — do not write a migration.** `knowledge_sources`, `knowledge_chunks` and `retrieval_traces` are created by `ensure_tables()` (`repository/knowledge_repository.py:146-158`), which the ingest CLI runs and the server runs once per process on its first retrieval. It is a whitelisted `create_all` and never touches `dialogue_states`. Two consequences: `create_all` only CREATEs — **adding a column to one of those models will not alter an existing table**, you have to `ALTER` by hand; and these tables are exactly what `docker compose down -v` destroys with nothing in the repo able to recreate them.
 
+### Switching the retrieval chain
+
+Two retrieval chains ship in this repo. `.env.example` defaults to the first one because it needs
+nothing beyond an API key; the second is what the RAG rebuild delivered.
+
+| | Chroma + DashScope | Milvus + BGE-M3 |
+|---|---|---|
+| Embedding | hosted `text-embedding-v3`, dense only | local BGE-M3, dense + sparse |
+| Retrieval | cosine Top-K + threshold | hybrid search + rerank + LangGraph |
+| Gate | vector score, 0.58 | rerank relevance score, 0.155 |
+| Query latency | 0.68–0.85s | ~2.1s (rerank round-trip is 94% of it) |
+| Extra setup | none | ~2GB of deps, three containers, a 2.3GB model |
+
+Switching is one command, and it is idempotent:
+
+```bash
+# customer-service-backend/
+bash scripts/enable_milvus_rag.sh            # switch to Milvus + BGE-M3 + rerank + LangGraph
+bash scripts/enable_milvus_rag.sh --revert   # back to Chroma + DashScope
+```
+
+It installs the dependencies, starts Milvus, **creates a separate metadata database**, rewrites
+`.env`, rebuilds the index, and asserts `vector_chunks == metadata_chunks` at the end. Every step
+checks the state it was supposed to produce rather than trusting its own exit code.
+
+**The separate metadata database is not optional.** The vector index is a local gitignored
+directory while `knowledge_sources` / `knowledge_chunks` live in the shared MySQL. Point two
+different embedding models at the same metadata and the `vector_chunks == metadata_chunks` check
+fails for everyone still on Chroma — for reasons unrelated to their own environment. The script
+derives `KNOWLEDGE_DATABASE_URL` from `DATABASE_URL` and creates `custom_service_ragmilvus`.
+
+**There is deliberately no automatic fallback.** If `VECTOR_BACKEND=milvus` and Milvus is
+unreachable, retrieval fails loudly into the "can't check right now, let me get you a human"
+path — it does not quietly drop back to Chroma. Silent fallback would let two people run the same
+commit and get different retrieval quality with no signal, which is the failure shape this repo
+keeps producing (see below).
+
 ### Running individual modules — the `-m` rule
 
 The project is **not installed as a package**. `uv run python <file path>` only puts that file's own directory on `sys.path`, so running a module directly fails with `ModuleNotFoundError: No module named 'business_agent'`. Use `-m` from `customer-service-backend/`:
