@@ -20,11 +20,11 @@
 {"question": "跨境的单子清关一直不通过", "expect": "hit", "kind": "explicit"}
 {"question": "拒收快递算不算退货", "expect": "hit", "kind": "scattered"}
 {"question": "我不想要了但是已经发货了怎么办", "expect": "hit", "kind": "scattered"}
-{"question": "你们客服电话是多少", "expect": "miss", "kind": "absent"}
-{"question": "门店几点开门几点关门", "expect": "miss", "kind": "absent"}
+{"question": "你们客服电话是多少", "expect": "hit", "kind": "present", "note": "原为 absent 用例。2026-08-28 businessagent-67 补了 business_info.md 后语料里有了答案（business_info 的「客服联系方式」），据实改为 hit——不改的话等于拿一条已经能答的问题继续当兜底基准"}
+{"question": "门店几点开门几点关门", "expect": "hit", "kind": "present", "note": "原为 absent 用例。2026-08-28 businessagent-67 补了 business_info.md 后语料里有了答案（business_info 的「营业时间与客服服务时间」），据实改为 hit——不改的话等于拿一条已经能答的问题继续当兜底基准"}
 {"question": "这款鞋子现在卖多少钱", "expect": "miss", "kind": "absent"}
 {"question": "帮我推荐一台适合剪视频的笔记本", "expect": "miss", "kind": "absent"}
-{"question": "怎么开增值税发票", "expect": "miss", "kind": "absent"}
+{"question": "怎么开增值税发票", "expect": "hit", "kind": "present", "note": "原为 absent 用例。2026-08-28 businessagent-67 补了 business_info.md 后语料里有了答案（business_info 的「发票」），据实改为 hit——不改的话等于拿一条已经能答的问题继续当兜底基准"}
 {"question": "支持货到付款吗", "expect": "hit", "kind": "present", "note": "原为 absent 用例。2026-08-28 补了支付方式 FAQ 后语料里有了答案，据实改为 hit——不改的话等于拿一条已经能答的问题继续当兜底基准"}
 {"question": "会员等级怎么升级", "expect": "miss", "kind": "absent"}
 {"question": "积分可以抵多少钱", "expect": "miss", "kind": "absent"}
@@ -32,3 +32,4 @@
 {"question": "今天北京天气怎么样", "expect": "miss", "kind": "absent"}
 {"question": "推荐一部最近好看的电影", "expect": "miss", "kind": "absent"}
 {"question": "你们用的是什么数据库", "expect": "miss", "kind": "absent"}
+{"question": "你们有实体店吗", "expect": "hit", "kind": "present", "note": "businessagent-67 送的边界样本。business_info.md 明写「无实体店」，所以答案存在；但在 text-embedding-v3 尺度上最高分 0.5555 < 阈值 0.58 被拒——正确分片排第一，是阈值拒的不是检索失败。成因是六字是非问句对五句话长分片天然吃亏。留作检验 rerank 是否真能处理「问题短、分片长」的用例"}
