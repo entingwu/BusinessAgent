@@ -613,6 +613,9 @@ meta-business-agent/
 
 ## C.4 RAG 技术选型
 
+> **⚠ C.4.1–C.4.8 记录的是第一版选型（Chroma + DashScope `text-embedding-v3`），已于 2026-08-28 完成并通过全部验收。该选型现已被 C.4.9 的重做方案取代。**
+> 这几节保留不删，因为重做的对照基线、被推翻的理由、以及「哪些降级当初是对的」都要靠它们才读得懂。**读现行结论请直接看 C.4.9。**
+
 > 通用选型依据见根目录 `RAG_ref.md`。本节是它在本项目约束下的**收敛结论**：`RAG_ref.md` 面向"可扩展到企业级"，本节面向"MVP 三周内跑通且零新增外部服务"，因此在向量库、Embedding、检索策略三处主动做了降级，并写明各自的升级触发条件。
 
 ### C.4.1 选型原则
@@ -682,7 +685,7 @@ meta-business-agent/
 | **第三档** | Cross-encoder 重排：ANN 取 Top-20 → 重排取 Top-5 | 提升 Top-K 内的排序精度 |
 
 > `RAG_ref.md` 建议一开始就上「Top-20 + 重排」。本项目不这么做：知识源规模是几十篇文档，向量召回本身已足够，重排带来的是延迟与一个额外模型。等评测集（第二档）跑出来、确认排序确实是瓶颈时再加。
-> 第三档的混合检索与重排未单列在附录 C.3，实施时按 2–3 人天计。
+> 第三档的混合检索与重排未单列在附录 C.3。**这两项已于 2026-08-28 提前到当下实施**，不再按第三档处理——见 C.4.9。当时按 2–3 人天计的估算偏低：单看混合检索 + RRF + 重排三段确是 2–3 人天，但它们依赖的向量库与 Embedding 更换是另外 3.5–5 人天，整体 9.5–14。**「加个重排」从来不是一个独立可加项。**
 
 ------
 
@@ -724,6 +727,77 @@ meta-business-agent/
 | `knowledge/provider/provider.py` | `KnowledgeChunk` 加来源标识与相似度（B.4 已列） |
 | `repository/knowledge_repository.py` | 知识源与分片的元数据落库（类型、名称、入库时间、Embedding 模型名） |
 | `config/settings.py` | Embedding 模型、向量库路径、分片大小 / 重叠、Top-K、阈值 —— 全部环境变量驱动 |
+
+------
+
+### C.4.9 选型重做：Milvus + BGE-M3 混合检索（2026-08-28 决策，现行）
+
+第一版选型（C.4.1–C.4.8）已完整落地并通过 7.1 全部验收。本节记录**推翻它的决策**、施工步骤与工时。
+
+**决策依据**：对齐 `knowledge_base/atguigu` 的技术栈。该项目与本项目共用同一份 `RAG_ref.md` 作为选型依据，但走的是完整版路线；本项目第一版走的是 MVP 路线。两者不是对错之分，是同一份文档在不同约束下的两个落点。**本次决定收敛到完整版。**
+
+> 需要写明的一点：C.4.5 曾以「知识源只有几十篇文档，向量召回本身已足够，等评测集证明排序是瓶颈时再加」为由拒绝重排与混合检索，而**评测集并未证明排序是瓶颈**——基线实测有答案召回 22/22，Top-K 内没有漏召。因此本次重做**不是被数据推动的，是选型对齐决策**。这条如实记下，以免后来人误以为是性能问题倒逼。
+
+#### C.4.9.1 分环节变更
+
+| 环节 | 第一版（C.4.2） | 重做后 | 性质 |
+|---|---|---|---|
+| Embedding | DashScope `text-embedding-v3`，托管，1024 维 dense | **BGE-M3 本地**，一次产出 dense + sparse 双向量 | 托管 → 自托管 |
+| 向量库 | Chroma，进程内本地目录 | **Milvus standalone**（etcd + minio + milvus 三容器） | 零新增服务 → 新增三个容器 |
+| 检索 | 余弦 Top-K + 阈值 + metadata 过滤 | **混合检索**（dense + sparse）+ **RRF 融合**（`weight/(k+rank)`，k=60）+ **rerank** | 单路 → 三段 |
+| 查询改写 | 无 | **HyDE**：LLM 先生成假设性答案，再对答案检索 | 新增 |
+| 编排 | 普通函数调用 | **LangGraph `StateGraph`**，入库与查询各一张图 | 新增 |
+| 切分 | `RecursiveCharacterTextSplitter` | 不变 | 保留 |
+| 语料 | 45 片，中文 | 不变 | 保留 |
+
+**rerank 用 DashScope 托管的 `TextReRank`，不需要 GPU。** 这是三段里最便宜的一段——`knowledge_base` 那边的 `reranker_http_utils.py` 只有 50 行。
+
+#### C.4.9.2 本机硬约束（估算的前提）
+
+| 约束 | 实测 | 后果 |
+|---|---|---|
+| 无 CUDA | Apple M1 Max | `knowledge_base/pyproject.toml` 强制走 `download.pytorch.org/whl/cu128`，**本机装不上**，须改用默认 PyPI 的 arm64 轮子；`use_fp16` 必须关闭 |
+| Docker 内存 8GB | MySQL 已占一部分 | Milvus standalone 官方建议 ≥8GB，45 片量级跑得动但需上调 Docker Desktop 上限 |
+| 磁盘剩 32GB | BGE-M3 权重 ~2.3GB + torch 全家桶 + Milvus 镜像 ~2GB | 够用，装完约剩 25GB |
+
+#### C.4.9.3 施工步骤与工时
+
+| Phase | 内容 | 人天 |
+|---|---|---:|
+| **0** | **固定基线**：用 34 条校准集跑一遍现行实现，冻结对照数字 | 0.5 |
+| **1** | 基础设施：`docker-compose` 加 Milvus 三件套（独立 project name）；`vector_client.py` 扩接口支持 `AnnSearchRequest` + `WeightedRanker`；BGE-M3 本地化 | 2–3 |
+| **2** | 入库侧重建：embedding 换 BGE-M3 产双向量；Milvus collection 建两个向量字段；**全量重建索引** | 1.5–2 |
+| **3** | 检索侧三件套：混合检索 + RRF → rerank → HyDE | 2–3 |
+| **4** | **重新校准**：阈值卡在哪一层（向量分 / RRF 分 / rerank 分）、Top-K 与 rerank TopK 配比 | 1 |
+| **5** | LangGraph 编排：入库与查询改写成 `StateGraph` | 2–3 |
+| **6** | 验收：spec-auditor 重跑 7.1 第 1/2/3 条 + 与 Phase 0 基线逐项对照 | 1 |
+| — | 保留 Chroma 作为 `VECTOR_BACKEND` 可切换退路（支持 A/B 对照与回滚） | +0.5 |
+| | **合计** | **9.5–14** |
+
+**Phase 0 不可跳过。** 没有基线，「换了更先进的技术栈」是一句无法证伪的话。基线已冻结在 `customer-service-backend/knowledge_eval/BASELINE_chroma_dashscope.md`。
+
+**Phase 5 对答案质量零贡献**，是纯架构对齐。若工期紧张，砍它不影响检索效果。
+
+#### C.4.9.4 改造后必须对照的五项
+
+1. **有答案召回** —— 基线 22/22，不得低于
+2. **无答案正确兜底** —— 基线 11/12，目标 12/12
+3. **「支持货到付款吗」那条误通过** —— 基线里唯一的失败项（top=0.7263，与「支持海外或港澳台配送吗？」表面句式相似）。混合检索的 sparse 分量理论上能区分这两者，**这是本次改造最该兑现的一条**；若仍误通过，说明 RRF 与 rerank 没有解决实际问题
+4. **端到端延迟** —— 基线单条检索 0.68–0.85 秒。改造后大概率变差（BGE-M3 走 CPU，且多了 HyDE 一次 LLM 调用与 rerank 一次 API 调用）。**允许变差，但要量出来，不能估**
+5. **「未命中不调 LLM」的机制保证** —— 现行实现里未命中、低于阈值、向量库不可用三条路径都在建立 LLM chain 之前 return 常量，编造在机制上不可能发生。**LangGraph 改写不得破坏这一点**，这是验收 7.1 第 3 条与 5.2 红线
+
+#### C.4.9.5 哪些留、哪些扔
+
+| 保留 | 废弃 |
+|---|---|
+| `knowledge_source/` 语料（45 片不重写） | Chroma 实现（降级为可切换退路） |
+| `ingest/loader.py`、`splitter.py` 切分逻辑 | `text-embedding-v3` 调用路径 |
+| `KnowledgeChunk` 的溯源字段 | **阈值 0.58 与那 34 条的校准结论** |
+| `retrieval_traces` 表 | `vector_client.py` 的四方法接口（dense+sparse 装不进去，须扩） |
+| `KnowledgeResponder` 的兜底保证 | |
+| `engines/builder.py` 注册、`Provider` 抽象 | |
+
+**最贵的隐性成本是阈值作废。** BGE-M3 的分数分布与 `text-embedding-v3` 不同；加 rerank 之后「分数」的语义再变一次（rerank 分是相关性打分，不是余弦）。34 条要重跑，且阈值该卡在三段中的哪一层需要重新决定。
 
 ------
 
