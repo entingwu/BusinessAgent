@@ -65,20 +65,32 @@ async def rerank(query: str, documents: list[str], *, timeout: float = 15.0) -> 
     # top_n 取全长：我们要的是给每一条打分，截断由调用方按阈值与断崖决定。
     "parameters": {"return_documents": False, "top_n": len(documents)},
   }
-  try:
-    async with httpx.AsyncClient(timeout=timeout) as client:
-      response = await client.post(
-        RERANK_URL,
-        headers={"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"},
-        json=payload,
-      )
-    if response.status_code != httpx.codes.OK:
-      raise RerankUnavailableError(f"rerank HTTP {response.status_code}: {response.text[:200]}")
-    results = response.json().get("output", {}).get("results", [])
-  except RerankUnavailableError:
-    raise
-  except Exception as error:
-    raise RerankUnavailableError(f"rerank call failed: {error}") from error
+  # 重试一次。rerank 失败的后果是静默降级回向量分——精度下降但没人会注意到，
+  # 因为回复照常返回。实测连续调用（校准跑 34 条）会偶发瞬时失败，
+  # 一次重试就能盖住，不重试等于让质量随机波动。
+  last_error: Exception | None = None
+  for attempt in range(2):
+    try:
+      async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+          RERANK_URL,
+          headers={"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"},
+          json=payload,
+        )
+      if response.status_code != httpx.codes.OK:
+        raise RerankUnavailableError(f"rerank HTTP {response.status_code}: {response.text[:200]}")
+      results = response.json().get("output", {}).get("results", [])
+      break
+    except Exception as error:
+      last_error = error
+      if attempt == 0:
+        await asyncio.sleep(0.5)
+  else:
+    # 带上异常类型：httpx 的部分异常 str() 为空，只打 message 会得到
+    # 「rerank call failed: 」这种没有任何信息的日志。
+    raise RerankUnavailableError(
+      f"rerank call failed after 2 attempts: {type(last_error).__name__}: {last_error}"
+    ) from last_error
 
   # 散射回填：接口按相关性倒序返回，必须用 index 放回原位置，否则分数与文档错位。
   scores = [0.0] * len(documents)
