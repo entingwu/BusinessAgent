@@ -21,16 +21,17 @@ from business_agent.task.flows.steps import CollectionFlowStep
 from business_agent.task.handler import TaskHandler
 
 
-# user_flows.yml 里既有的转人工流程。它自己会回一句转接提示，
-# 所以接管策略命中同一轮时不再重复补话
+# The handoff flow that already exists in user_flows.yml. It emits its own transfer notice, so
+# when the handoff policy fires on the same turn it does not add a second one.
 HUMAN_HANDOFF_FLOW_ID = "human_handoff"
 
-# system_flows.yml 里的「办不了」流程
+# The "cannot handle this" flow in system_flows.yml
 CANNOT_HANDLE_FLOW_ID = "system_cannot_handle"
 
-# 连续澄清到第几轮改口说「我理解偏了」。取 2：第 1 次换个说法是正常的，
-# 第 2 次还不行说明问题出在我这边而不是用户表述上。
-# 第 3 次由接管策略转人工（handoff/control.py 的阈值），三级递进
+# How many consecutive clarifications before switching to "I misread that". Two: asking once
+# more is normal, but a second failure means the problem is on our side rather than in how the
+# user phrased it. The third goes to a human via the handoff policy (the threshold in
+# handoff/control.py) — three escalating steps.
 CLARIFY_REPHRASE_THRESHOLD = 2
 
 
@@ -64,9 +65,11 @@ class DialogueEngine:
     # 2. start turn
     self._start_turn(user_message, dialogue_state)
 
-    # 3. 停答门闸（规范 3.3.4 第一档：HUMAN 状态下 Agent 不再自动应答）。
-    #    消息照常入库——坐席要看到用户在这期间说了什么——但不进规划、不调 LLM。
-    #    放在最前面是有意的：一旦人工接管，连意图识别都不该跑
+    # 3. The stop-answering gate (spec 3.3.4 tier 1: the Agent stops answering automatically
+    #    while a human holds the session). Messages are still persisted — the human agent needs
+    #    to see what the user said meanwhile — but they never reach planning and never call the
+    #    LLM. Placing this first is deliberate: once a human takes over, not even intent
+    #    recognition should run.
     if dialogue_state.is_human_controlled():
       return self._commit(user_message, dialogue_state, bot_messages=[])
 
@@ -85,7 +88,8 @@ class DialogueEngine:
                                                        dialogue_state,
                                                        self.task_handler.flow_list)
 
-    # 5. 接管判定：本轮处理完再判，这样「连续失败」的计数已经反映了这一轮
+    # 5. Handoff decision, made after the turn is handled so the consecutive-failure counters
+    #    already reflect this turn
     bot_messages = self._apply_handoff_policy(user_message, dialogue_state, bot_messages,
                                              handoff_flow_ran, handled_by_flow)
 
@@ -97,8 +101,8 @@ class DialogueEngine:
               state: DialogueState,
               bot_messages: list[BotMessage]) -> ProcessedResult:
     """
-    Goal: 落 turn 并封装返回。control_owner 是会话级的，从 state 取，
-          不是每条消息各自带一份（附录 E.2 第 3 条）
+    Goal: commit the turn and wrap the result. control_owner is session-level and read from
+          state — it is not carried per message (appendix E.2, rule 3)
     """
     state.pending_turn.bot_messages = bot_messages
     state.commit_pending_turn()
@@ -115,31 +119,36 @@ class DialogueEngine:
                             handoff_flow_ran: bool,
                             handled_by_flow: bool) -> list[BotMessage]:
     """
-    Goal: 判断本轮是否触发转人工；触发则切 PENDING_HUMAN 并按需追加一句提示
+    Goal: decide whether this turn triggers a handoff; if so switch to PENDING_HUMAN and append
+          a notice when one is needed
     Args:
-        user_message: 本轮用户消息，卡片消息没有文本
+        user_message: the user message for this turn; card messages carry no text
         state:
-        bot_messages: 本轮已经产生的回复
-        handoff_flow_ran: 本轮是否已经跑过 human_handoff 流程。跑过就直接移交控制权、
-                          且不再补提示——那个流程自己会说「我来为你转接人工客服」，
-                          否则一次转接会连着播三句意思相同的话
+        bot_messages: the replies already produced this turn
+        handoff_flow_ran: whether the human_handoff flow already ran this turn. If it did,
+                          transfer control straight away and add no notice — that flow already
+                          says "I am transferring you to a human agent", and without this a
+                          single transfer would say the same thing three times over
     Returns:
-        可能追加了提示的回复列表
+        the reply list, possibly with a notice appended
     """
-    # 规划器启动 human_handoff 本身就是一次移交决定，不需要再让关键词表复核一遍。
-    # 这里必须先于 evaluate：evaluate 在 handled_by_flow=True 时会压掉高风险话题触发
-    # （那条压制是对的，它挡住了「你们退货政策几天」被 RISKY_TOPIC 劫持成转人工），
-    # 但 human_handoff 恰恰是唯一一个该移交控制权的流程。
+    # The planner starting human_handoff is itself a decision to transfer; the keyword table
+    # does not need to confirm it. This must come before evaluate(): with handled_by_flow=True,
+    # evaluate suppresses the risky-topic trigger (correctly so — that suppression is what stops
+    # 「你们退货政策几天」 from being hijacked into a handoff), but human_handoff is precisely
+    # the one flow that should transfer control.
     #
-    # 不修的后果实测过：「我要投诉你们，我要找人工」——「找人工」不在关键词表里
-    # （表里是「找客服」），planner 却正确地启动了 human_handoff，于是用户听到
-    # 「我来为你转接人工客服」，而 control_owner 停在 AGENT：输入框不锁、没人被叫、
-    # 用户在等一个从未被召唤的坐席。界面宣称成功而系统什么都没做，比直接报错更糟。
+    # The consequence of not doing this was measured: 「我要投诉你们，我要找人工」 — 「找人工」
+    # is not in the keyword table (「找客服」 is), yet the planner correctly started
+    # human_handoff. So the user heard "I am transferring you to a human agent" while
+    # control_owner stayed AGENT: the composer never locked, nobody was paged, and the user waited
+    # for an agent who was never summoned. A UI that claims success while the system did nothing
+    # is worse than an outright error.
     if handoff_flow_ran:
       if state.control_owner is not handoff_control.ControlOwner.PENDING_HUMAN:
         state.request_handoff(handoff_control.HandoffTrigger.USER_REQUESTED,
-                              "规划器启动了 human_handoff 流程")
-      # 流程自己已经说了「我来为你转接人工客服」，不再追加提示
+                              "planner started the human_handoff flow")
+      # The flow already said "I am transferring you to a human agent" — add nothing
       return bot_messages
 
     decision = handoff_control.evaluate(
@@ -147,13 +156,15 @@ class DialogueEngine:
       consecutive_clarify=state.consecutive_clarify,
       consecutive_knowledge_miss=state.consecutive_knowledge_miss,
       handled_by_flow=handled_by_flow,
-      # 规范 3.3.4「命中配置关键词」：商家可在 HANDOFF_KEYWORDS 里加自己的高危词
+      # Spec 3.3.4's "configured keyword matched": merchants add their own high-risk words
+      # through HANDOFF_KEYWORDS
       extra_keywords=handoff_control.configured_keywords(),
     )
     if not decision.needed:
       return bot_messages
 
-    # 已经在排队了就不再重复提示，否则用户每说一句都收到一遍「正在转接」
+    # Already queued means no repeat notice, otherwise every further message would be answered
+    # with another "transferring you now"
     already_pending = state.control_owner is handoff_control.ControlOwner.PENDING_HUMAN
     state.request_handoff(decision.trigger, decision.reason)
     if already_pending:
@@ -164,16 +175,17 @@ class DialogueEngine:
 
   def _cannot_handle_reason(self, reason: ClarifyReason, state: DialogueState) -> str | None:
     """
-    Goal: 判断这轮该走「办不了」而不是「再澄清一次」
+    Goal: decide whether this turn should say "cannot handle" rather than clarify once more
     Returns:
-        system_flows.yml 里的分支名；None 表示照常澄清
+        the branch name in system_flows.yml; None means clarify as usual
     """
-    # 规划器点名了一个不存在的业务流程 = 这个能力我们没有。
-    # 让用户「换个更具体的说法」是误导，他再具体也变不出这个能力
+    # The planner named a business flow that does not exist = we do not have that capability.
+    # Asking the user to "be more specific" misleads them; no amount of precision conjures a
+    # capability that is not there.
     if reason is ClarifyReason.UNKNOWN_TASK_FLOW:
       return "not_supported"
 
-    # 连续澄清还不行，问题在我这边，换个说法承认理解偏了
+    # Clarification keeps failing, so the problem is on our side — say we misread it instead
     if state.consecutive_clarify >= CLARIFY_REPHRASE_THRESHOLD:
       return "clarification_rejected"
 
@@ -217,7 +229,8 @@ class DialogueEngine:
     Args: 
         dialogue_state
     Returns:
-        (回复列表, 本轮是否跑过 human_handoff 流程, 本轮是否被配置的流程或知识意图接住)
+        (replies, whether human_handoff ran this turn, whether a configured flow or knowledge
+         intent caught this turn)
     """
     # 1. Use turn planner
     turn_plan: TurnPlan = await self.turn_planner.predict(dialogue_state, flow_list=self.task_handler.flow_list, knowledge_intents=self.knowledge_handler.knowledge_intents)
@@ -230,12 +243,14 @@ class DialogueEngine:
 
     # 3. Process validated failure
     if not validated.valid:
-      # 连续澄清失败是「Agent 处理不了」的信号，累计到阈值触发转人工
+      # Consecutive clarification failures signal "the Agent cannot handle this"; once they
+      # reach the threshold they trigger a handoff
       dialogue_state.note_clarify(happened=True)
 
-      # 「听不懂」与「办不了」是两回事：前者让用户换个说法有用，
-      # 后者换多少遍说法都没用，该直说这个能力没有。
-      # system_cannot_handle 流程本来就是为后者写的，此前从未被启动过
+      # "I did not understand" and "we cannot do that" are different things: rephrasing helps
+      # with the first and never helps with the second, where the honest answer is that the
+      # capability does not exist. The system_cannot_handle flow was written for the second case
+      # and had never once been started.
       cannot_handle_reason = self._cannot_handle_reason(validated.reason, dialogue_state)
       if cannot_handle_reason is not None:
         dialogue_state.start_system_task(SystemCannotHandleContext(
@@ -244,20 +259,22 @@ class DialogueEngine:
 
       return await self.clarify_responder.respond(validated.reason, dialogue_state), False, False
 
-    # 识别成功，连续失败计数清零
+    # Recognised successfully — reset the consecutive-failure counter
     dialogue_state.note_clarify(happened=False)
 
     # 4. validated succeed(which path? Go to path handler to execute path logic)
     if turn_plan.task is not None:
-      # 必须同时判类型：ResumeFlowCommand / CancelFlowCommand 也有 flow 字段，
-      # 光用 getattr(command, "flow") 会把它们一起算进来。
+      # The type must be checked too: ResumeFlowCommand and CancelFlowCommand also carry a
+      # `flow` field, so a bare getattr(command, "flow") sweeps them in as well.
       #
-      # 这个判据从前只用来抑制一句重复提示，误判无代价；现在它决定控制权归属，
-      # 误判就变成会话状态被悄悄改写。实测过的漏洞：用户说「继续刚才的转人工」，
-      # 规划器给出 ResumeFlowCommand(flow='human_handoff')——而 human_handoff
-      # 一轮内 start→respond→end 走完，永远不会进 paused_tasks，恢复必然失败。
-      # 于是机器人回「当前没有找到可以继续的业务流程」，同时 control_owner
-      # 被标成 PENDING_HUMAN 且一句提示都没有：系统状态和它自己说的话直接矛盾。
+      # This test used to only suppress one duplicate notice, where a false positive cost
+      # nothing; now it decides who owns the session, and a false positive silently rewrites
+      # session state. The measured hole: the user says 「继续刚才的转人工」, the planner emits
+      # ResumeFlowCommand(flow='human_handoff') — and human_handoff runs start→respond→end
+      # within one turn, so it never enters paused_tasks and the resume necessarily fails. The
+      # bot then replies "there is nothing in progress to pick up" while control_owner is set to
+      # PENDING_HUMAN with no notice at all: the system's state directly contradicts what it
+      # just said.
       handoff_flow_ran = any(
         isinstance(command, StartFlowCommand) and command.flow == HUMAN_HANDOFF_FLOW_ID
         for command in turn_plan.task.commands)
@@ -268,7 +285,7 @@ class DialogueEngine:
       return await self.chitchat_handler.handle(turn_plan.chitchat.chat, dialogue_state), False, False
 
     # 5. Directly return bot message
-    return [BotMessage(text="你好，我是一个智能助手")], False, False
+    return [BotMessage(text="Hi, I am your shopping assistant.")], False, False
 
 
   async def _handle_object_message(self, 
@@ -281,14 +298,14 @@ class DialogueEngine:
     # 1. Try to construct SetSlotsCommand object
     command = self._try_build_set_slots_command(object, dialogue_state, flow_list)
 
-    # 2. check command: 情况3：流程继续推进下一步
+    # 2. check command — case 3: the flow advances to its next step
     if command:
       return await self.task_handler.handle(commands=[command], dialogue_state=dialogue_state)
 
-    if dialogue_state.active_task is not None: # 情况2：流程继续执行，但是不去推进下一步，而是在执行当前这一步
+    if dialogue_state.active_task is not None:  # case 2: the flow runs on, re-executing the current step rather than advancing
       return await self.task_handler.handle(commands=[], dialogue_state=dialogue_state)
 
-    # 情况1. 澄清
+    # case 1: clarify
     return await self.clarify_responder.respond(reason=ClarifyReason.OBJECT_REQUIRES_INTENT, state=dialogue_state)
 
 
@@ -318,9 +335,9 @@ class DialogueEngine:
                                 flow_list: FlowList) -> bool:
     """
     Goal: Process click card
-    情况1. 没有业务流程， 返回False
-    情况2. 有业务流程, 但是收集步骤的时候, 并不缺少卡片信息, 返回False
-    情况3. 有业务流程, 刚好手机该步骤的时候, 点击卡片信息, 返回True
+    Case 1: no business flow in progress -> False
+    Case 2: a flow is running, but the collect step is not waiting on the card's slot -> False
+    Case 3: a flow is running and is collecting exactly that slot when the card is clicked -> True
     Args:
         slot_name:
         state:

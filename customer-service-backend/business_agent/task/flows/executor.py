@@ -21,17 +21,19 @@ class FlowExecutor:
                           action_runner, 
                           flow_list) -> list[BotMessage]:
     """
-    Goal: 推进两份YAML中流程。目标: 推进业务流程[顺便推进系统流程]
-    两层循环：
-    外层循环: execute找到的action
-    内存循环: find执行action
-    特点：
-    1. 两个YAML中的流程在推进期间可能出现交替
-    2. 推进业务、系统流程的分界线是步骤类型为Action
-    3. 遇到步骤类型是Action,都需要先停止。
-    4. 步骤类型是Action, 且名字是action_response或者action_xxx的时候, 
-    都需要通过action_runner找到action，执行action. 获取槽位的更新值或者
-    回复响应之后，再推进流程的后续步骤.
+    Goal: advance the flows defined across both YAML files — the business flow, and the system
+    flow alongside it.
+
+    Two nested loops: the outer one executes the action that was found, the inner one walks the
+    flow to find the next action.
+
+    Notes:
+    1. The business flow and the system flow may alternate while advancing.
+    2. The boundary between advancing them is a step of type Action.
+    3. Every Action step forces a stop first.
+    4. For an Action step named action_response or action_xxx, action_runner resolves and runs
+       the action; only after collecting its slot updates or its reply does the flow advance to
+       the following steps.
     Args:
         dialogue_state:
         action_runner:
@@ -40,14 +42,14 @@ class FlowExecutor:
     """
     final_response_messages: list[BotMessage] = []
     while True:
-      # 1. 找流程步骤是Action
+      # 1. Walk to the next Action step
       action_call: ActionCall = self._advance_flow_util_action(state, flow_list)
 
-      # 2. action名字是listen
+      # 2. The action is action_listen
       if action_call.action_name == "action_listen":
         break
 
-      # 3. action名字是action_response或者action_xxx
+      # 3. The action is action_response or action_xxx
       action_result=await action_runner.run(action_call, state)
       final_response_messages.extend(action_result.messages)
       state.set_slots(action_result.updated_slots)
@@ -58,35 +60,36 @@ class FlowExecutor:
                                 state: DialogueState,
                                 flow_list: FlowList) -> ActionCall:
     """
-    Goal: 推进流程并且在推进流程期间找步骤类型是action
-    如果执行流程期间步骤类型不是action，继续执行下一步流程（继续推进流程）
-    如果执行流程期间步骤类型是action，不能继续推，要构建action_call, 并且返回。
+    Goal: advance the flow, stopping at the next step of type action.
+    A non-action step is executed and the walk continues to the following step.
+    An action step stops the walk: build an ActionCall and return it.
     Args:
         state:
         flow_list:
     Returns:
     """
     while True:
-      # 1. 获取要推进的流程的上下文
+      # 1. The context of the flow being advanced
       current_task = state.current_task()
 
-      # 1.1 业务流程和系统流程都已结束，停下来等用户下一句
+      # 1.1 Both the business flow and the system flow have ended — stop and wait for the
+      #     user's next message
       if current_task is None:
         return ActionCall(action_name="action_listen")
 
-      # 2. 从上下文中流程ID（一个属性 双重身份）
+      # 2. The flow id from the context (one attribute, serving both flow kinds)
       flow_id = current_task.flow_id
 
-      # 3. 获取流程对象
+      # 3. The flow object
       flow = flow_list.get_flow_by_flow_id(flow_id)
 
-      # 4. 获取步骤ID
+      # 4. The step id
       step_id = current_task.step_id
 
-      # 5. 获取步骤对象
+      # 5. The step object
       step = flow.get_step_by_step_id(step_id)
 
-      # 6. 运行步骤
+      # 6. Run the step
       action_call = self._run_step(step, state, flow_list)
 
       if action_call is not None:
@@ -98,7 +101,7 @@ class FlowExecutor:
                 state: DialogueState,
                 flow_list: FlowList) -> ActionCall | None:
     """
-    Goal: 运行步骤
+    Goal: run one step
     Args:
         step:
         state:
@@ -121,26 +124,27 @@ class FlowExecutor:
                       state: DialogueState,
                       flow_list: FlowList) -> None:
     """
-    Goal: 运行步骤类型是start, 什么都不用干, 找到下一个步骤ID, 更新到state中的流程上下文。
+    Goal: run a start step — nothing to do but resolve the next step id and write it into the
+          flow context on state.
     Args:
         step:
         state:
         flow_list:
     Returns:
     """
-    # 1. 推进下一步
+    # 1. Advance to the next step
     self._advance_next_step(step, state)
 
-    # 2. 返回None
+    # 2. Return None
     return None
 
   def _advance_next_step(self,
                          step: FlowStep,
                          state: DialogueState):
-    # 1. 找step_id
+    # 1. Resolve the next step_id
     next_step_id = self._find_next_step_id(step, state)
 
-    # 2. 更新step_id
+    # 2. Write the step_id back
     state.current_task().step_id = next_step_id
 
   def _find_next_step_id(self,
@@ -150,7 +154,7 @@ class FlowExecutor:
       if isinstance(link, FlowStepStaticLink):
         return link.target    # step_id
       elif isinstance(link, FlowStepConditionLink):
-        # 1. 计算条件表的条件
+        # 1. Evaluate the edge's condition
         if self._eval_condition(link.condition, state):
           return link.target  # step_id
       elif isinstance(link, FlowStepFallbackLink):
@@ -173,15 +177,18 @@ class FlowExecutor:
       "slots": state.active_task.slots if state.active_task is not None else {},
     }
 
-    # 条件表达式来自 YAML，是配置不是代码，写错了不该让用户收到 500。
-    # 这条防线是随 product_recommendation 的 `int(slots.get('product_round'))`
-    # 一起加的——那是仓库里第一条做类型强转的条件，槽位值一旦不是数字串就 ValueError。
-    # 当前写入者只有 _next_round（只产数字串）、且槽位白名单挡着 LLM 写它，
-    # 所以触发不了；但这条依赖在 YAML 里看不见，不该靠它撑着。
+    # Condition expressions come from YAML: they are configuration, not code, and a typo in one
+    # should not hand the user a 500. This guard went in together with product_recommendation's
+    # `int(slots.get('product_round'))` — the first condition in the repo that coerces a type, so
+    # a slot value that is not a digit string raises ValueError. Today the only writer is
+    # _next_round (which only ever produces digit strings) and the slot whitelist stops the LLM
+    # from writing that slot, so it cannot fire; but that dependency is invisible from the YAML
+    # and should not be what holds this up.
     #
-    # 求值失败按「条件不成立」处理，也就是走 else 分支。这是保守方向：
-    # 分支走错顶多是流程多绕一轮，而抛异常是整通对话直接断掉。
-    # 必须打 WARNING——静默的 False 会让写错的条件永远不被发现
+    # A failed evaluation is treated as "condition not met", i.e. the else branch. That is the
+    # conservative direction: taking the wrong branch costs the flow one extra round, whereas
+    # raising cuts the whole conversation off.
+    # The WARNING is mandatory — a silent False would let a broken condition go unnoticed forever.
     try:
       return bool(eval(condition_expr, {}, data))
     except Exception as error:
@@ -192,8 +199,7 @@ class FlowExecutor:
   def _run_end_step(self, 
                     state: DialogueState) -> None:
     """
-    Goal: 清空对应的流程上下文
-    特点：不需要调用_advance_next_step方法
+    Goal: clear the corresponding flow context. Note that _advance_next_step is not called here.
     """
     if state.active_system_task is not None:
       state.end_system_task()
@@ -207,16 +213,15 @@ class FlowExecutor:
                        step: ActionFlowStep,  
                        state: ActionFlowStep) -> ActionCall:
     """
-    Goal: 构建ActionCall对象返回
-    特点: 需要调用_advance_next_step方法
+    Goal: build and return an ActionCall. Note that _advance_next_step **is** called here.
     """
-    # 1. 推进下一步
+    # 1. Advance to the next step
     self._advance_next_step(step, state)
 
-    # 2. 构建ActionCall返回
+    # 2. Build the ActionCall and return it
     action_kwargs = step.args # dict or str
     if isinstance(action_kwargs, str):  
-      # system_collect_information系统流程 args: context.response 转成字典dict
+      # For the system_collect_information flow, args is `context.response` — turn it into a dict
       action_kwargs = asdict(state.active_system_task)['response']
 
     return ActionCall(action_name=step.action, action_kwargs=action_kwargs)
@@ -227,16 +232,18 @@ class FlowExecutor:
                            state: DialogueState,
                            flow_list: FlowList) -> ActionCall | None:
     """
-    Goal: 让用户填写业务流程缺少的槽位信息。
-    特点1：
-    步骤类型是collect的，永远只出现在当前两个yml文件中的user_flow.yml中。[收集槽位本质属于业务端]
-    特点2：
-    run_collection_step方法会被触发两次。
-    为什么触发两次，希望对用户填写后的槽位信息做校验。主要是为了在配置文件中如何使用validated校验开关。
-    1. 让用户填写槽位信息, 触发第一次-----返回None,内层循环继续执行(current task),但是不能推进下一步(_advance_next_step)
-    2. 校验用户填写的槽位信息, 触发第二次(校验成功、校验失败)
-    校验成功：执行下一步：调用_advance_next_step, 返回None
-    校验失败：让用户再填写一次(填错的槽位移除掉，构建错误响应), ActionCall
+    Goal: ask the user for the slot values a business flow is missing.
+
+    Note 1: collect steps only ever appear in user_flows.yml, never in system_flows.yml —
+    collecting slots belongs to the business side by definition.
+
+    Note 2: this method runs twice per slot, so that what the user typed can be validated. That
+    is what the `validated` switch in the config file is for.
+    1. Ask the user for the value (first call) — returns None; the inner loop keeps running the
+       current task but must not advance (_advance_next_step is not called).
+    2. Validate what the user supplied (second call), which either passes or fails.
+       Passes: advance via _advance_next_step and return None.
+       Fails: ask again — drop the bad slot value, build the error response, return an ActionCall.
     Args:
         steps:
         state:
@@ -245,28 +252,28 @@ class FlowExecutor:
     self._try_set_slots_from_object(step, state, flow_list)
 
     if state.active_task.slots.get(step.slot_name):
-      # 第二次： 校验用户填写的槽位信息
+      # Second call: validate what the user supplied
       if step.validated:
-        # 有校验条件
+        # A validation rule is configured
         if self._eval_condition(condition_expr=step.validated.condition, state=state):
-          self._advance_next_step(step, state) # 推进下一步
+          self._advance_next_step(step, state)  # advance
           return None 
         else:
-          # a) 清空填错的槽位信息
+          # a) Drop the invalid slot value
           state.remove_slot(step.slot_name)
 
-          # b) 给错误响应
+          # b) Return the error response
           if step.validated.failure_response:
             return ActionCall(action_name="action_response",
                               action_kwargs=asdict(step.validated.failure_response))
           else:
             return ActionCall(action_name="action_response",
-                              action_kwargs={"text": "你填写的槽位信息有误不合法，请重新填写"})
+                              action_kwargs={"text": "That does not look like a valid value — could you enter it again?"})
       else:
-        self._advance_next_step(step, state) # 推进下一步
+        self._advance_next_step(step, state)  # advance
         return None
     else:
-      # 第一次： 让用户填写槽位信息，激活system_collect_information
+      # First call: ask the user for the value by activating system_collect_information
       state.start_system_task(SystemCollectInformationContext(
           flow_id="system_collect_information",
           step_id="start",
@@ -279,24 +286,26 @@ class FlowExecutor:
                                  step: CollectionFlowStep, 
                                  state: DialogueState,
                                  flow_list: FlowList):
-    # 1. 判断当前业务流程以及卡片对象是否有
+    # 1. Is there both a running flow and a focused card?
     if state.active_task is None or state.focused_object is None:
       return
 
-    # 2. 卡片类型和槽位的映射
+    # 2. Card type -> slot mapping
     expected_slots_mapping = {
       "order": "order_number",
       "product": "product_id",
     }
-    # 3. 获取期望的槽位
+    # 3. The slot this card type can fill
     expected_slots = expected_slots_mapping.get(state.focused_object.type)
 
-    # 4. 判断当前这一步缺失的槽位是否等于期望的槽位, 且当前业务流程上下文中槽位还没有，才利用前面点击过的卡片。
+    # 4. Only reuse the previously clicked card when the slot this step is waiting on is exactly
+    #    the one that card can fill, and the flow context does not already hold a value for it.
     if step.slot_name == expected_slots and not state.active_task.slots.get(step.slot_name):
-      # 卡片带来的 id 同样要过槽位守卫：卡片可能携带与其类型不符的 id，
-      # 而这条路径不经过 CommandProcessor，是槽位写入的第二个入口，漏了这里等于没修。
+      # An id arriving from a card goes through the slot guard as well: a card can carry an id
+      # that does not match its own type, and this path bypasses CommandProcessor entirely — it
+      # is the second entry point for slot writes, so skipping it here would leave the hole open.
       flow = flow_list.get_flow_by_flow_id(state.active_task.flow_id)
-      accepted = accept_slots(flow, {step.slot_name: state.focused_object.id}, source="卡片回填")
+      accepted = accept_slots(flow, {step.slot_name: state.focused_object.id}, source="card backfill")
       if accepted:
         state.set_slots(accepted)
 

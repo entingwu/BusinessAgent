@@ -16,44 +16,54 @@ class ActionResult:
 @dataclass(slots=True, frozen=True)
 class SlotSpec:
   """
-  一个动作要读的槽位。规范 3.1.5 要求每个工具声明入参
+  A slot an action reads. Spec 3.1.5 requires every tool to declare its inputs.
   """
-  name: str                    # 槽位名，与 flow_config 里的槽位一一对应
-  required: bool = True        # 缺这个槽位时动作能不能跑
-  description: str = ""        # 这个动作拿它做什么
+  name: str                    # slot name, one-to-one with the slots in flow_config
+  required: bool = True        # whether the action can run without this slot
+  description: str = ""        # what this action uses it for
 
 
 class Action(ABC):
   """
-  所有动作的基类。
+  Base class for every action.
 
-  除了 run()，子类还要**声明自己是什么**——规范 3.1.5【第一档】要求每个工具声明
-  名称、入参、出参、是否为写操作。这些声明不是文档，是给代码用的：
+  Beyond run(), a subclass also **declares what it is** — spec 3.1.5 (tier 1) requires every tool
+  to declare its name, inputs, outputs and whether it writes. These declarations are not
+  documentation, they are meant to be read by code:
 
-  - `reads` / `writes` 让「这个动作依赖哪些槽位、产出哪些槽位」变成可读取的事实，
-    而不是散落在各 action 里 `state.active_task.slots.get(...)` 的隐式约定；
-  - `is_write` 是规范 3.3.5 下单流程的前置：写操作前必须向用户确认，
-    没有这个标志就无法在引擎层区分「查一下」和「真的下单」；
-  - `idempotency_slots` 声明幂等键由哪些槽位构成（规范 B.4 第二档「加幂等键声明」）。
-    写操作重试时靠它判断「这是同一笔」，避免用户点两次就下两单。
+  - `reads` / `writes` turn "which slots this action depends on and which it produces" into a
+    readable fact, instead of an implicit convention scattered across each action as
+    `state.active_task.slots.get(...)`;
+  - `is_write` is the prerequisite for spec 3.3.5's ordering flow: a write must be confirmed with
+    the user first, and without this flag the engine cannot tell "just checking" from "actually
+    placing the order";
+  - `idempotency_slots` declares which slots make up the idempotency key (spec B.4, tier 2,
+    "add idempotency key declarations"). On a retried write it is what decides "this is the same
+    transaction", so clicking twice does not place two orders.
 
-  只读动作把这三样留空即可，默认值就是只读、无幂等键。
+  A read-only action leaves all three empty; the defaults are read-only with no idempotency key.
+
+  Note that nothing in the engine consumes these declarations yet — they are metadata until the
+  ordering flow lands. Do not assume `is_write=True` is already protecting anything.
   """
   name: str
   description: str = ""
 
-  # 入参：这个动作会从槽位里读什么
+  # Inputs: which slots this action reads
   reads: tuple[SlotSpec, ...] = ()
 
-  # 出参：这个动作会写回哪些槽位。只列槽位名——值的形态由动作自己保证
+  # Outputs: which slots this action writes back. Names only — the shape of the values is the
+  # action's own responsibility
   writes: tuple[str, ...] = ()
 
-  # 是否为写操作（会改变业务系统状态：下单、退款、催发货……）。
-  # 只读查询一律 False。引擎据此决定要不要先向用户确认
+  # Whether this is a write (it changes state in the business system: placing an order, issuing
+  # a refund, chasing a shipment...). Read-only lookups are always False. The engine uses this to
+  # decide whether to confirm with the user first.
   is_write: bool = False
 
-  # 幂等键由哪些槽位构成，仅对写操作有意义。
-  # 例如下单动作声明 ("order_draft_id",)，同一个草稿重试不会产生第二笔订单
+  # Which slots make up the idempotency key. Meaningful for writes only.
+  # An ordering action might declare ("order_draft_id",), so retrying the same draft never
+  # produces a second order.
   idempotency_slots: tuple[str, ...] = ()
 
   @abstractmethod
@@ -63,15 +73,16 @@ class Action(ABC):
   @classmethod
   def missing_required_slots(cls, state: DialogueState) -> list[str]:
     """
-    Goal: 按 reads 声明检查当前状态缺哪些必需槽位
+    Goal: check the current state against the `reads` declaration for missing required slots
     Args:
-        state: 当前对话状态
+        state: the current dialogue state
     Returns:
-        缺失的必需槽位名列表；不缺则为空
+        the names of the required slots that are missing; empty when none are
     """
     slots = state.active_task.slots if state.active_task is not None else {}
-    # 用「是不是没有值」判断，而不是 falsy：数量 0、空字符串、False 都是合法的槽位值，
-    # 按 falsy 判会把它们当成没填，让流程反复追问一个用户已经回答过的问题
+    # Test for "has no value" rather than falsiness: a quantity of 0, an empty string and False
+    # are all legitimate slot values, and a falsy test would read them as unanswered, making the
+    # flow ask again for something the user already told us.
     return [
       spec.name for spec in cls.reads
       if spec.required and cls._is_blank(slots.get(spec.name))
@@ -79,20 +90,22 @@ class Action(ABC):
 
   @staticmethod
   def _is_blank(value: Any) -> bool:
-    """槽位算不算「没填」：只有 None 与纯空白字符串算，0 / False 都算填了"""
+    """Whether a slot counts as unfilled: only None and whitespace-only strings do — 0 and False
+    both count as filled."""
     return value is None or (isinstance(value, str) and not value.strip())
 
   @classmethod
   def idempotency_key(cls, state: DialogueState) -> str | None:
     """
-    Goal: 由声明的槽位拼出这次写操作的幂等键
-    只读动作或没声明 idempotency_slots 的动作返回 None。
-    任何一个组成槽位为空都返回 None——宁可让调用方自己兜底，
-    也不要拼出一个「看起来像但其实不唯一」的键，那比没有键更危险。
+    Goal: build this write's idempotency key from the declared slots.
+    Read-only actions, and actions that declare no idempotency_slots, return None.
+    If any component slot is empty the result is also None — better to make the caller handle
+    that than to produce a key that looks valid while not actually being unique, which is more
+    dangerous than having no key at all.
     Args:
         state: 当前对话状态
     Returns:
-        幂等键字符串，或 None
+        the idempotency key string, or None
     """
     if not cls.is_write or not cls.idempotency_slots:
       return None
@@ -101,11 +114,15 @@ class Action(ABC):
     if any(cls._is_blank(value) for value in values):
       return None
 
-    # 对值取哈希而不是直接拼接，解决三件事：
-    # 1. 拼接不转义时，含冒号的槽位值会让不同组合拼出同一个键，而这层的全部意义就是唯一性；
-    # 2. 地址这类长槽位拼出来会超过中台 idempotency_key 的 64 字符上限；
-    # 3. 幂等键会进日志与错误信息，哈希顺带避免把收货地址原文带出去。
-    # 前缀保留动作名，排查时还能一眼看出这是哪个动作的键。
+    # Hash the values rather than concatenating them, which solves three things at once:
+    # 1. without escaping, slot values containing a colon let different combinations collapse to
+    #    the same key — and uniqueness is this layer's entire purpose;
+    # 2. long slots such as an address would push the concatenation past the commerce service's
+    #    64-character idempotency_key limit;
+    # 3. idempotency keys reach logs and error messages, and hashing keeps the delivery address
+    #    out of both.
+    # The action name stays as a prefix so a key is still recognisable at a glance when
+    # debugging.
     digest = hashlib.sha256(
       "\u0000".join(str(value) for value in values).encode("utf-8")
     ).hexdigest()[:32]

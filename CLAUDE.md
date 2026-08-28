@@ -194,7 +194,8 @@ Leftover from earlier work, safe to remove when touching that file: the `/test` 
 
 - **Python uses 2-space indentation**, not 4. Match it.
 - Docstrings follow a `Goal:` / `Args:` / `Returns:` convention.
-- Comments and docstrings are mixed Chinese and English; keep writing in whichever the surrounding block uses.
+- **Comments and docstrings are English.** They used to be mixed Chinese and English with the rule "match the surrounding block"; that rule is gone, and writing new Chinese comments re-opens the mix. The migration is tracked as tier A of the englishification work — until it finishes you will still meet Chinese comments in untouched files, so translate the ones you edit rather than matching them.
+- **Some Chinese is load-bearing and must not be translated.** Product attribute values (`办公`, `极简`, …) in `flow_config/user_flows.yml` and `STYLE_VALUES` in `recommend_products.py` are matching keys sent to the commerce service, which stores `"use_case": "办公"`; order status values (`待发货`, `运输中`, …) are lookup keys in the frontend's `ORDER_STATUS_CLASS`. Translating either half without the other returns an empty result set — indistinguishable from "no matching products" — so it fails silently. Both are commented in place.
 - Domain models are `@dataclass(slots=True)` with hand-written `to_dict()` / `from_dict()` pairs (not `asdict`) — when adding a field to a domain model, update **both** methods or it silently vanishes on the next state load.
 - API models are Pydantic; domain models are dataclasses. The two are converted explicitly in `api/chat_router.py` — never leak a Pydantic model past the router.
 - Configuration is environment-driven through `config/settings.py`; a missing key fails startup immediately by design. Add new settings there, and to `.env.example`.
