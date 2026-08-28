@@ -803,9 +803,24 @@ meta-business-agent/
 
 | 约束 | 实测 | 后果 |
 |---|---|---|
-| 无 CUDA | Apple M1 Max | `knowledge_base/pyproject.toml` 强制走 `download.pytorch.org/whl/cu128`，**本机装不上**，须改用默认 PyPI 的 arm64 轮子；`use_fp16` 必须关闭 |
+| **无 CUDA，但有 MPS** | Apple M1 Max，`torch.backends.mps.is_available() == True` | atguigu 的 `pyproject.toml` 强制走 `download.pytorch.org/whl/cu128`，**本机装不上**，须用默认 PyPI 的 arm64 轮子；`use_fp16` 关闭（需 CUDA）。**但 Metal 后端可用，不是只能纯 CPU** —— 实测见下 |
 | Docker 内存 8GB | MySQL 已占一部分 | Milvus standalone 官方建议 ≥8GB，45 片量级跑得动但需上调 Docker Desktop 上限 |
 | 磁盘剩 32GB | BGE-M3 权重 ~2.3GB + torch 全家桶 + Milvus 镜像 ~2GB | 够用，装完约剩 25GB |
+
+**Phase 2 实测（2026-08-28，BGE-M3 本地）：**
+
+| | 模型加载（缓存后） | 单条查询延迟（中位） | 批量 34 条 |
+|---|---|---|---|
+| 基线：DashScope `text-embedding-v3` | — | **0.68–0.85s**（API 往返） | — |
+| BGE-M3 **CPU** | 1.7s | **0.308s** | 0.75s（0.022s/条） |
+| BGE-M3 **MPS** | 1.6s | **0.148s** | 1.28s（0.038s/条） |
+
+**「本地推理会更慢」这个预期是错的，反了。** 本地 MPS 比托管 API 快 4.5 倍——托管方案的延迟主要花在网络往返上，不是计算。首次加载 710 秒是下载 2.3GB 权重，缓存之后 1.7 秒。
+
+**MPS 与 CPU 各有胜场**：MPS 单条快一倍（交互路径），CPU 批量反而更快（入库路径）——MPS 每次调用有固定开销，批量时摊薄不掉。因此 `EMBEDDING_DEVICE` 应当可配置，查询侧用 `mps`、入库脚本用 `cpu`。
+
+dense 1024 维（与 `text-embedding-v3` 相同，元数据表的 `embedding_dimensions` 不用改）；sparse 正常产出，实测首条 10 个非零项。
+
 
 #### C.4.9.3 施工步骤与工时
 
@@ -855,7 +870,7 @@ meta-business-agent/
 1. **有答案召回** —— 基线 22/22，不得低于
 2. **无答案正确兜底** —— 基线 11/12，目标 12/12
 3. **「支持货到付款吗」那条误通过** —— 基线里唯一的失败项（top=0.7263，与「支持海外或港澳台配送吗？」表面句式相似）。混合检索的 sparse 分量理论上能区分这两者，**这是本次改造最该兑现的一条**；若仍误通过，说明 RRF 与 rerank 没有解决实际问题
-4. **端到端延迟** —— 基线单条检索 0.68–0.85 秒。改造后大概率变差（BGE-M3 走 CPU，且多了 HyDE 一次 LLM 调用与 rerank 一次 API 调用）。**允许变差，但要量出来，不能估**
+4. **端到端延迟** —— 基线 0.68–0.85 秒。**Embedding 这一段实测变快了**（MPS 0.148s，快 4.5 倍），但链路新增 HyDE 一次 LLM 调用（最贵）与 rerank 一次 API 调用。净效果未知，**必须量，不能估**——「本地推理会更慢」这个预期已经被证伪一次了
 5. **「未命中不调 LLM」的机制保证** —— 现行实现里未命中、低于阈值、向量库不可用三条路径都在建立 LLM chain 之前 return 常量，编造在机制上不可能发生。**LangGraph 改写不得破坏这一点**，这是验收 7.1 第 3 条与 5.2 红线
 
 #### C.4.9.6 哪些留、哪些扔（本项目侧）
