@@ -190,6 +190,47 @@ These return successfully with placeholder content — they are not bugs to fix 
 
 Leftover from earlier work, safe to remove when touching that file: the `/test` endpoint and inline `User` model in `api/chat_router.py`. (The digital-human integration and the `atguigu-frontend` package name are **gone** — removed in `fb4d7d4`.)
 
+## Failure modes this repo keeps producing
+
+Every one of these cost real debugging time here. They share a shape: **the failing path and the
+succeeding path return the same thing**, so nothing tells you anything went wrong.
+
+- `open -a "Docker Desktop"` — wrong app name (it is `Docker.app`). Reports success, launches
+  nothing. 400 seconds spent waiting for a daemon that was never starting.
+- Milvus `get_collection_stats` returns `row_count: 0` until you `flush()`. Ingest reports 45
+  chunks written, stats shows 0.
+- BSD `sed` (macOS) does not support `\b`. `s/\bcommerce\b/.../` silently matches nothing and
+  exits 0 — which is how `DROP DATABASE` once landed on the shared `commerce` database.
+- `ingest` skips a source when `content_hash` is unchanged, without checking whether the local
+  vector store actually holds those vectors. On a fresh checkout it reports every source
+  `skipped`, exits 0, and leaves an empty index.
+- FastAPI silently ignores query parameters it does not declare, so an old container answers
+  `GET /products?attr=...` with 200 and every row — the filter looks like it worked.
+
+**Detection rule: never trust the return value of an operation; assert the state it was supposed
+to produce.** `ps` that the process exists, `count(*)` rather than a cached statistic, `grep -c`
+the substitution actually happened.
+
+**Two-sided facts warn on one side only.** `SYSTEM_CONTEXT_TO_CLASS` missing a class raises
+`KeyError` (loud, safe); a YAML flow nobody starts is silent (dangerous). The commerce attribute
+allow-list 400s on an unknown name but returns 200 + empty on a renamed key. Whenever two
+independent places must agree, ask **which direction warns** — the other one is where the bugs live.
+
+> Why every surviving bug is on the silent side: the loud half gets fixed within minutes of being
+> written, so it never reaches anyone's field of view. It is survivorship bias in code. An audit
+> that only finds errors that raise has not looked deep enough.
+
+**Half-migrations.** Changing A without the B that was calibrated against it — and B does not
+complain. Real cases here: the vector index was isolated per checkout but its metadata stayed in
+shared MySQL; `score` switched to rerank values while the adjacent `threshold` column kept the
+vector threshold; a rerank outage fell back to vector scores but kept the rerank threshold.
+
+**Prefer impossible over remembered.** Deleting the redundant `USE commerce;` beats asserting on
+it; storing paths relative to the source root beats documenting "run `--force` after merging";
+`git worktree add --detach <commit>` for an audit beats asking people not to touch main while it
+runs. A good migration check is self-limiting — "the stored path is absolute" stops matching once
+the migration is done, so it needs no version column and no cleanup.
+
 ## Code conventions
 
 - **Python uses 2-space indentation**, not 4. Match it.
