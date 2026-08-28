@@ -8,6 +8,7 @@ import time
 from business_agent.chitchat.handler import ChitChatHandler
 from business_agent.clarify.responder import ClarifyResponder
 from business_agent.domain.messages import BotMessage, FocusedObject, MessageType, ProcessedResult, UserMessage
+from business_agent.domain.contexts import SystemCannotHandleContext
 from business_agent.domain.state import DialogueState
 from business_agent.handoff import control as handoff_control
 from business_agent.knowledge.handler import KnowledgeHandler
@@ -23,6 +24,14 @@ from business_agent.task.handler import TaskHandler
 # user_flows.yml 里既有的转人工流程。它自己会回一句转接提示，
 # 所以接管策略命中同一轮时不再重复补话
 HUMAN_HANDOFF_FLOW_ID = "human_handoff"
+
+# system_flows.yml 里的「办不了」流程
+CANNOT_HANDLE_FLOW_ID = "system_cannot_handle"
+
+# 连续澄清到第几轮改口说「我理解偏了」。取 2：第 1 次换个说法是正常的，
+# 第 2 次还不行说明问题出在我这边而不是用户表述上。
+# 第 3 次由接管策略转人工（handoff/control.py 的阈值），三级递进
+CLARIFY_REPHRASE_THRESHOLD = 2
 
 
 class DialogueEngine:
@@ -135,6 +144,23 @@ class DialogueEngine:
     notice = handoff_control.PENDING_NOTICE.get(decision.trigger)
     return [*bot_messages, BotMessage(text=notice)] if notice else bot_messages
 
+  def _cannot_handle_reason(self, reason: ClarifyReason, state: DialogueState) -> str | None:
+    """
+    Goal: 判断这轮该走「办不了」而不是「再澄清一次」
+    Returns:
+        system_flows.yml 里的分支名；None 表示照常澄清
+    """
+    # 规划器点名了一个不存在的业务流程 = 这个能力我们没有。
+    # 让用户「换个更具体的说法」是误导，他再具体也变不出这个能力
+    if reason is ClarifyReason.UNKNOWN_TASK_FLOW:
+      return "not_supported"
+
+    # 连续澄清还不行，问题在我这边，换个说法承认理解偏了
+    if state.consecutive_clarify >= CLARIFY_REPHRASE_THRESHOLD:
+      return "clarification_rejected"
+
+    return None
+
   def _prepare_session(self, state: DialogueState):
     """
     Goal: Create session object
@@ -188,6 +214,16 @@ class DialogueEngine:
     if not validated.valid:
       # 连续澄清失败是「Agent 处理不了」的信号，累计到阈值触发转人工
       dialogue_state.note_clarify(happened=True)
+
+      # 「听不懂」与「办不了」是两回事：前者让用户换个说法有用，
+      # 后者换多少遍说法都没用，该直说这个能力没有。
+      # system_cannot_handle 流程本来就是为后者写的，此前从未被启动过
+      cannot_handle_reason = self._cannot_handle_reason(validated.reason, dialogue_state)
+      if cannot_handle_reason is not None:
+        dialogue_state.start_system_task(SystemCannotHandleContext(
+          flow_id=CANNOT_HANDLE_FLOW_ID, step_id="start", reason=cannot_handle_reason))
+        return await self.task_handler.handle([], dialogue_state), False, False
+
       return await self.clarify_responder.respond(validated.reason, dialogue_state), False, False
 
     # 识别成功，连续失败计数清零

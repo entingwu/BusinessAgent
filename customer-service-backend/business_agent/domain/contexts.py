@@ -104,7 +104,19 @@ if __name__ == '__main__':
   user = User(id=111, name="tom")
   print(asdict(user))
 
+# system_cannot_handle
+@dataclass(slots=True)
+class SystemCannotHandleContext(SystemContext):
+  """
+  reason 决定走 system_flows.yml 里哪个分支：
+  not_supported / clarification_rejected，都不匹配则落 ask_rephrase。
+  这个流程此前从未被启动过——YAML 写好了，代码里零引用。
+  """
+  reason: str
+
+
 SYSTEM_CONTEXT_TO_CLASS: dict[str, type[SystemContext]] = {
+  "system_cannot_handle": SystemCannotHandleContext,
   "system_task_started": SystemTaskStartedContext,
   "system_task_interrupted": SystemTaskInterruptedContext,
   "system_task_resumed": SystemTaskResumedContext,

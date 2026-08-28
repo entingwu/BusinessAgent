@@ -155,8 +155,6 @@ flows:
             then: clarification_rejected
           - if: "context.get('reason') == 'not_supported'"
             then: not_supported
-          - if: "context.get('reason') == 'no_relevant_answer'"
-            then: no_relevant_answer
           - else: ask_rephrase
 
       - id: clarification_rejected
@@ -182,23 +180,6 @@ flows:
         args:
           mode: rephrase
           text: "我理解你的意思，不过这个能力目前还没有接入。"
-          prompt: |
-            你是一个中文电商客服助手，语气自然、友好、简洁。
-            请基于下面的建议回复，生成一句更自然的中文回复，保持原意，不要扩写。
-            对话上下文：
-            {history}
-            用户最后一句：
-            用户：{user_message}
-            建议回复：{current_response}
-            改写后的回复：
-        next: end
-
-      - id: no_relevant_answer
-        type: action
-        action: action_response
-        args:
-          mode: rephrase
-          text: "我暂时没有查到合适的信息。你可以换个说法，或者告诉我更具体一点的商品或订单信息。"
           prompt: |
             你是一个中文电商客服助手，语气自然、友好、简洁。
             请基于下面的建议回复，生成一句更自然的中文回复，保持原意，不要扩写。
