@@ -33,6 +33,10 @@ class ActionResponse(Action):
         state:
     """
 
+    # 快捷回复按钮：三种模式都可以带。它不参与 LLM 改写，
+    # 因为按钮文案要和意图集对得上，交给模型润色会改出识别不了的说法
+    suggestions = list(action_kwargs.get('suggestions') or [])
+
     # 1. 获取响应的模式
     mode = action_kwargs.get('mode', 'static')
 
@@ -47,7 +51,7 @@ class ActionResponse(Action):
 
       # c) 调用LLM
       rewritten = await self._call_llm(prompt, state, render_text)
-      return ActionResult(messages=[BotMessage(text=rewritten)])
+      return ActionResult(messages=[BotMessage(text=rewritten, suggestions=suggestions)])
 
     elif mode == "generate":
       # generate: 从0到1由LLM生成，不依赖YAML里的原始文案，
@@ -57,12 +61,12 @@ class ActionResponse(Action):
 
       # b) 调用LLM
       generated = await self._call_llm(prompt, state)
-      return ActionResult(messages=[BotMessage(text=generated)])
+      return ActionResult(messages=[BotMessage(text=generated, suggestions=suggestions)])
 
     else:
       # static: 直接渲染YAML里的文案
       render_text = self._render_text(action_kwargs['text'], state)
-      return ActionResult(messages=[BotMessage(text=render_text)])
+      return ActionResult(messages=[BotMessage(text=render_text, suggestions=suggestions)])
 
   async def _call_llm(self, 
                       prompt_template_str: str, 

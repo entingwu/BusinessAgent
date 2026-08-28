@@ -18,6 +18,9 @@ class ResponseDefinition:
   text: str
   mode: str="static"       # generate: llm generation(0-1), rephrase: llm generation based on original object 
   prompt: str | None = None
+  # 快捷回复按钮文案（附录 E）。收集步骤挂上它，用户点一下就把值填回来，
+  # 不必自己敲——这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式
+  suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -106,14 +109,16 @@ class CollectionFlowStep(FlowStep):
       response=ResponseDefinition(
         text=step_dict['response']['text'],
         mode=step_dict['response'].get('mode', 'static'),
-        prompt=step_dict['response'].get('prompt')
+        prompt=step_dict['response'].get('prompt'),
+        suggestions=list(step_dict['response'].get('suggestions') or []),
       ),
       validated=Validated(
         condition=step_dict['validated']['condition'],
         failure_response=ResponseDefinition(
           text=step_dict['validated']['failure_response']['text'],
           mode=step_dict['validated']['failure_response'].get('mode', 'static'),
-          prompt=step_dict['validated']['failure_response'].get('prompt')
+          prompt=step_dict['validated']['failure_response'].get('prompt'),
+          suggestions=list(step_dict['validated']['failure_response'].get('suggestions') or []),
         ) if step_dict['validated'].get('failure_response') is not None else None,
       ) if step_dict.get('validated') is not None else None,
     )

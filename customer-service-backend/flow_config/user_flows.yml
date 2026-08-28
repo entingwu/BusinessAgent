@@ -39,6 +39,19 @@ slots:
     label: 商品ID
     description: 当前咨询商品的唯一标识
 
+  product_use_case:
+    type: text
+    label: 使用场景
+    description: 商品的使用场景。可选值：办公、游戏、差旅、居家、健身、通勤
+  product_budget:
+    type: text
+    label: 预算上限
+    description: 用户能接受的价格上限，只取数字部分，例如“500”“500元以内”
+  product_style:
+    type: text
+    label: 风格偏好
+    description: 商品风格。可选值：极简、商务、电竞、北欧、运动
+
   refund_reason:
     type: text
     label: 退款原因
@@ -159,28 +172,45 @@ flows:
         type: end
         next: [ ]
 
-  similar_product_recommendation:
-    name: 相似商品推荐
-    description: 基于当前商品为用户推荐类似商品。当前版本先保留流程入口，具体推荐能力后续接入。
+  product_recommendation:
+    name: 商品推荐
+    description: 根据用户的用途、预算、风格等偏好，从商品目录里挑选并推荐商品。
     steps:
       - id: start
         type: start
-        next:
-          - if: "slots.get('product_id')"
-            then: respond
-          - else: ask_product_id
+        next: ask_use_case
 
-      - id: ask_product_id
+      # 三个收集步骤都挂了快捷回复：用户点一下就把值填回来，
+      # 不必自己敲。这是 3.3.3「快捷回复推进下一步」两轮收敛的实现方式
+      - id: ask_use_case
         type: collect
-        slot_name: product_id
+        slot_name: product_use_case
         response:
-          text: "请先选择一个商品，再继续咨询。"
-        next: respond
+          text: "好的，我帮你挑。主要想用在什么场景？"
+          suggestions: [ "办公", "游戏", "差旅", "居家" ]
+        next: ask_budget
 
-      - id: respond
+      - id: ask_budget
+        type: collect
+        slot_name: product_budget
+        response:
+          text: "预算大概多少？"
+          suggestions: [ "300 以内", "500 以内", "1000 以内", "不限" ]
+        next: ask_style
+
+      - id: ask_style
+        type: collect
+        slot_name: product_style
+        response:
+          text: "喜欢什么风格？"
+          suggestions: [ "极简", "商务", "电竞", "北欧" ]
+        next: recommend
+
+      - id: recommend
         type: action
-        action: action_recommend_similar_products
+        action: action_recommend_products
         next: end
+
       - id: end
         type: end
         next: [ ]
