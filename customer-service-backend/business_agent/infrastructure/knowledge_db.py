@@ -1,29 +1,33 @@
 """
-知识库元数据的独立连接。
+A separate connection for knowledge-base metadata.
 
-## 为什么不复用 db_client 的那一份
+## Why it does not reuse db_client's
 
-`knowledge_sources` / `knowledge_chunks` / `retrieval_traces` 记的是「当前索引由哪个
-Embedding 模型、从哪份语料建出来的」。而**向量索引本身是各人本地的 gitignored 目录**
-（Chroma 目录 / Milvus 容器），元数据却在共享的那一个 MySQL 里。
+`knowledge_sources` / `knowledge_chunks` / `retrieval_traces` record which embedding model and
+which corpus the current index was built from. But **the vector index itself is a per-checkout,
+gitignored thing** (a Chroma directory, a Milvus container) while the metadata lives in the one
+shared MySQL.
 
-两者的共享程度不一致，就会出事：2026-08-28 本分支用 BGE-M3 重建索引（45→47 片），
-共享元数据表被整体改写成 `BAAI/bge-m3`，而 main 分支上每个人的 Chroma 仍是
-`text-embedding-v3` 的 45 片。于是 CLAUDE.md 那条验收检查
-「`vector_chunks` 必须等于 `metadata_chunks`」对所有人失败——**而失败的原因与他们
-自己的环境无关**。
+When two things are shared to different degrees, this happens: on 2026-08-28 this branch rebuilt
+the index with BGE-M3 (45 -> 47 chunks) and rewrote the shared metadata table to `BAAI/bge-m3`,
+while everyone on main still had 45 chunks from `text-embedding-v3` in their Chroma. The
+acceptance check in CLAUDE.md — "`vector_chunks` must equal `metadata_chunks`" — then failed for
+all of them, **for a reason that had nothing to do with their own environment**.
 
-更糟的是它会静默误导：`ingest` 靠比对元数据里的 `content_hash` 决定跳过什么，
-从不检查本地向量库有没有那些向量。main 上的人跑一次 `ingest`（不带 `--force`）
-会得到「全部 skipped、执行成功」，然后带着模型对不上的索引继续跑。
+Worse, it misleads silently: `ingest` decides what to skip by comparing the `content_hash` in the
+metadata and never checks whether the local vector store actually holds those vectors. Someone on
+main running plain `ingest` gets "all sources skipped, completed successfully" and carries on with
+an index built by a different model.
 
-## 结论：索引在哪隔离，元数据就该在哪隔离
+## The conclusion: isolate the metadata wherever the index is isolated
 
-`KNOWLEDGE_DATABASE_URL` 缺省等于 `DATABASE_URL`（main 的行为不变）；
-换了 Embedding 或向量库的分支把它指向独立的库，与 main 物理隔开。
+`KNOWLEDGE_DATABASE_URL` defaults to `DATABASE_URL`, so main's behaviour is unchanged. A branch
+that swaps the embedding model or the vector store points it at its own database, physically
+separated from main.
 
-这条是本项目反复得出的同一个判据：**共享的东西要么真共享，要么物理隔离，
-最糟的是「看起来共享其实语义不同」。**
+This is the same judgement this project keeps arriving at: **something shared should either be
+genuinely shared or physically separated; the worst state is "looks shared, means something
+different".**
 """
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -35,8 +39,9 @@ _factory: async_sessionmaker[AsyncSession] | None = None
 
 def get_knowledge_session_factory() -> async_sessionmaker[AsyncSession]:
   """
-  Goal: 取知识元数据的 session 工厂（进程内单例）。
-        KNOWLEDGE_DATABASE_URL 未配时退回 DATABASE_URL，与改造前行为一致。
+  Goal: the session factory for knowledge metadata, as a per-process singleton.
+        Falls back to DATABASE_URL when KNOWLEDGE_DATABASE_URL is unset, matching the behaviour
+        before this split.
   Returns: async_sessionmaker[AsyncSession]
   """
   global _engine, _factory
@@ -48,7 +53,7 @@ def get_knowledge_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 def get_knowledge_engine() -> AsyncEngine:
-  """Goal: 取知识元数据的 engine，建表时用。"""
+  """Goal: the engine for knowledge metadata, used when creating tables."""
   get_knowledge_session_factory()
   assert _engine is not None
   return _engine

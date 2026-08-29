@@ -183,9 +183,10 @@ class IngestPipeline:
     model_name = backend.name
     result = await backend.embed_documents([embedding_text(chunk) for chunk in chunks])
 
-    # sparse 只有 bge_m3 后端产出；dashscope 后端下 result.sparse 为空列表，
-    # 这里给 None，向量库那边按「没有稀疏向量」处理（Chroma 本就忽略，
-    # Milvus 会写入空稀疏向量，该条只能被 dense 那一路命中）。
+    # Only the bge_m3 backend produces sparse vectors; under the dashscope backend result.sparse is
+    # an empty list, so None is passed here and the vector store treats the record as having no
+    # sparse vector (Chroma ignores it anyway; Milvus writes an empty sparse vector, and that record
+    # can then only be hit by the dense route).
     sparse_rows = result.sparse if result.has_sparse else [None] * len(chunks)
 
     records = [

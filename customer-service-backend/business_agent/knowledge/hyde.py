@@ -1,21 +1,24 @@
 """
-HyDE（Hypothetical Document Embedding）—— 先让 LLM 写一段假设性答案，再拿它去检索。
+HyDE (Hypothetical Document Embedding) — have the LLM write a hypothetical answer first, then
+retrieve with that instead of the question.
 
-## 它解决什么
+## What it is for
 
-用户问「吊牌剪了还能退吗」，文档写的是「吊牌与防伪标识未被剪除或损坏」。
-口语提问与书面条款之间有措辞鸿沟，直接拿问题去检索，向量要跨越这个鸿沟。
-HyDE 先生成一段**书面语气的假设答案**，用它去检索，等于把查询挪到了与文档
-同一个语域里。
+A user asks "can I still return it if the tag is cut off"; the document says "the price tag and
+anti-counterfeit label have not been cut off or damaged". There is a wording gap between a spoken
+question and a written clause, and retrieving with the question directly asks the vector to cross
+that gap. HyDE generates a **hypothetical answer in the register of the documents** and retrieves
+with that, which moves the query into the same register as the corpus.
 
-## 代价必须先说清楚
+## The cost, stated first
 
-**它多一次 LLM 调用。** 本项目实测同类调用 2.0–2.7 秒，而整条检索链路
-（BGE-M3 本地推理 + Milvus + rerank）总共不到 1 秒。**HyDE 是这条链路上
-最贵的一步，比其余全部加起来还贵一倍以上。**
+**It adds one LLM call.** Comparable calls measure 2.0-2.7s here, while the whole retrieval chain
+(local BGE-M3 inference + Milvus + rerank) is under a second. **HyDE is the most expensive step on
+this path — more than everything else put together, twice over.**
 
-因此它默认关闭，且值不值得开要看 Phase 8 的召回对照——如果基线召回已经很高
-（本项目 23/23），HyDE 能改善的空间本来就小，那这个延迟就买不到东西。
+So it is off by default, and whether it earns its place depends on a recall comparison: if
+baseline recall is already high, there is little room for HyDE to improve and the latency buys
+nothing.
 """
 import logging
 
@@ -30,17 +33,19 @@ logger = logging.getLogger(__name__)
 
 class HydeUnavailableError(RuntimeError):
   """
-  Goal: 假设性答案生成失败。上层应退回「只用原问题检索」，而不是整轮失败——
-        HyDE 是提升召回的增强项，它挂了不该让用户拿不到答案。
+  Goal: generating the hypothetical answer failed. Callers should fall back to retrieving with the
+        original question alone rather than failing the turn — HyDE improves recall, and losing it
+        should not leave the user with no answer.
   """
 
 
 async def generate_hypothetical_answer(question: str) -> str:
   """
-  Goal: 为问题生成一段假设性答案，供第二路检索使用。
+  Goal: generate a hypothetical answer for a question, for the second retrieval route to use.
   Args:
-      question: 用户原问题
-  Returns: str 假设性答案；生成失败时抛出，由调用方决定退回单路检索
+      question: the user's original question
+  Returns: the hypothetical answer; raises on failure, leaving the caller to fall back to a single
+           route
   Raises: HydeUnavailableError
   """
   question = (question or "").strip()

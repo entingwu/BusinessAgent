@@ -46,5 +46,8 @@ def estimate_tokens(text: str) -> int:
 
 
 if __name__ == '__main__':
+  # The first string stays Chinese deliberately: it is the only thing here that exercises the CJK
+  # branch of the estimate. Englishifying it would leave both prints on the latin path and the
+  # 1-token-per-character rule untested.
   print(estimate_tokens("七天无理由退货的往返运费由消费者承担。"))
   print(estimate_tokens("RecursiveCharacterTextSplitter"))

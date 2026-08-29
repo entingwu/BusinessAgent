@@ -19,17 +19,20 @@ from business_agent.observability import configure_logging
 if __name__ == '__main__':
   configure_logging()
 
-  # 预热必须在 uvicorn.run() **之前**，不能放进 lifespan。
+  # Warming up has to happen **before** uvicorn.run(), and cannot move into lifespan.
   #
-  # 本地 Embedding 后端（BGE-M3）加载时会 fork 子进程，而 lifespan 已经跑在
-  # uvloop 的事件循环里；在那里 fork 会破坏事件循环的 fd 状态，实测把整个进程
-  # 打成 SIGSEGV（栈顶是 kevent → uv__io_poll → uvloop Loop._run）。症状极难
-  # 归因：服务正常启动、第一个知识问题也正常答完，然后进程凭空消失——没有
-  # traceback、没有 shutdown 日志，只有系统崩溃报告里有线索。
+  # The local embedding backend (BGE-M3) forks child processes while loading, and lifespan already
+  # runs inside uvloop's event loop. Forking there corrupts the loop's file-descriptor state, and
+  # measured, it takes the whole process down with SIGSEGV (top of stack:
+  # kevent -> uv__io_poll -> uvloop Loop._run).
   #
-  # 放在这里，fork 发生在事件循环存在之前，冲突不成立；顺带把首个知识请求的
-  # 模型加载耗时（实测 15.8s）挪到启动期。
-  # 用 DashScope 后端时它是空转，不产生任何代价。
+  # The symptom is very hard to attribute: the service starts normally, the first knowledge
+  # question is even answered correctly, and then the process simply vanishes — no traceback, no
+  # shutdown log, the port just goes free. The system crash report is the only evidence.
+  #
+  # Here the fork happens before the event loop exists, so the conflict cannot arise. It also
+  # moves the model load out of the first knowledge request, which measured 15.8s.
+  # With the DashScope backend this is a no-op and costs nothing.
   warmup_embedding_backend()
 
   uvicorn.run(app="business_agent.api.app:app", host=settings.app_host, port=settings.app_port)

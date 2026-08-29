@@ -101,7 +101,7 @@ async def main_test():
   print(content)
 
   # Embedding self-check: the dimensions must match settings.embedding_dimensions
-  vector = await embed_query("退货政策是什么")
+  vector = await embed_query("What is the return policy")
   print(f"embedding model={embedding_model_name()} dim={len(vector)}")
 
 

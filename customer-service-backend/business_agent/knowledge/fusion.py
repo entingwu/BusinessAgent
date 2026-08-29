@@ -1,28 +1,32 @@
 """
-多路检索结果的融合 —— RRF（Reciprocal Rank Fusion）。
+Fusing results from multiple retrievers — RRF (Reciprocal Rank Fusion).
 
-## 它融合的是什么
+## What it actually fuses
 
-**不是 dense 与 sparse。** 那两路的融合由 Milvus 的 `WeightedRanker` 在
-`hybrid_search` 内部完成，一次调用就出结果。
+**Not dense and sparse.** Milvus fuses those inside `hybrid_search` with its `WeightedRanker`,
+and one call produces the result.
 
-RRF 融合的是**多个检索器**：原问题一路、HyDE 假设性答案一路。这两路用的是
-不同的查询文本，各自返回一个排序列表，需要合并成一个。
+RRF fuses **multiple retrievers**: one route for the original question, one for the HyDE
+hypothetical answer. The two use different query text, each returns its own ranked list, and the
+lists have to become one.
 
-这个区分很容易混淆，混淆的代价是估算时把 RRF 重复计算一次——本项目就犯过。
+The distinction is easy to blur, and blurring it double-counts RRF when estimating work — which
+happened on this project.
 
-## 为什么按名次而不是按分数
+## Why by rank rather than by score
 
-不同检索路的分数不可比：原问题那路的余弦分和 HyDE 那路的余弦分，量纲一样但
-分布不同（HyDE 文本更长更书面，整体分数偏高）。**按名次融合天然免疫这种尺度差异**，
-这是 RRF 相对加权求和最实用的性质。
+Scores from different retrieval routes are not comparable: the cosine score from the
+original-question route and from the HyDE route share units but not distribution (HyDE text is
+longer and more formal, so its scores run high). **Fusing by rank is immune to that difference in
+scale**, which is RRF's most practical property over a weighted sum.
 
-公式来自 knowledge_base/atguigu 的 node_rrf._rrf_merge：
+The formula follows atguigu's node_rrf._rrf_merge:
 
     score(doc) = Σ  weight_i / (k + rank_i)
 
-k=60 是 RRF 的经验常数，作用是压平头部——不加 k 的话第 1 名的权重是第 2 名的
-两倍，太陡；k=60 让前十几名的权重差异变得平缓，避免某一路的第 1 名直接主导结果。
+k=60 is RRF's conventional constant, and its job is to flatten the head of the list. Without k the
+first rank carries twice the weight of the second, which is too steep; k=60 makes the weights
+across the first dozen or so ranks gentle, so no single route's top hit dominates the result.
 """
 from typing import Any, Iterable, TypeVar
 
@@ -37,13 +41,14 @@ def rrf_merge(ranked_lists: Iterable[tuple[list[T], float]],
               k: int = RRF_K,
               max_results: int | None = None) -> list[T]:
   """
-  Goal: 把多路已排序的检索结果按 RRF 融合成一路。
+  Goal: fuse several ranked result lists into one with RRF.
   Args:
-      ranked_lists: [(已按相关性降序的列表, 该路权重), ...]
-      key: 从元素取唯一标识的函数，用于跨路去重
-      k: RRF 常数，默认 60
-      max_results: 截断，None 表示不截断
-  Returns: list[T] 按融合分降序；同一文档在多路出现时只保留一份（取先遇到的那个对象）
+      ranked_lists: [(list sorted by descending relevance, that route's weight), ...]
+      key: extracts a unique identifier from an element, used to de-duplicate across routes
+      k: the RRF constant, 60 by default
+      max_results: truncation; None means no truncation
+  Returns: list[T] in descending fused score. A document appearing in several routes is kept once,
+           as the first object encountered.
   """
   scores: dict[Any, float] = {}
   items: dict[Any, T] = {}
@@ -51,7 +56,8 @@ def rrf_merge(ranked_lists: Iterable[tuple[list[T], float]],
     for rank, item in enumerate(ranked):
       identity = key(item)
       scores[identity] = scores.get(identity, 0.0) + weight / (k + rank + 1)
-      # 只保留先遇到的对象：权重高的那一路先传进来，它带的分数与元数据更可信
+      # Keep the first object encountered: the higher-weighted route is passed in first, and its
+      # score and metadata are the more trustworthy ones
       items.setdefault(identity, item)
   ordered = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
   merged = [items[identity] for identity, _ in ordered]

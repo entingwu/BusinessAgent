@@ -32,8 +32,8 @@ class VectorRecord:
   vector: list[float]
   document: str
   metadata: dict[str, Any] = field(default_factory=dict)
-  # 稀疏向量 {token_id: weight}，仅 bge_m3 后端产出。Chroma 不支持稀疏检索，
-  # 它会忽略这个字段；Milvus 用它做混合检索的第二路。
+  # Sparse vector as {token_id: weight}; only the bge_m3 backend produces one. Chroma has no
+  # sparse retrieval and ignores this field; Milvus uses it as the second leg of hybrid search.
   sparse: dict[int, float] | None = None
 
 
@@ -283,12 +283,12 @@ def get_vector_client():
   if backend == "chroma":
     _vector_client = ChromaVectorClient()
   elif backend == "milvus":
-    # 延迟导入：用 chroma 的环境不必装 pymilvus
+    # Imported lazily so a Chroma-only environment does not need pymilvus installed
     from business_agent.infrastructure.milvus_client import MilvusVectorClient
     _vector_client = MilvusVectorClient()
   else:
     raise VectorStoreUnavailableError(
-      f"未知的 VECTOR_BACKEND={backend!r}，可选：chroma、milvus")
+      f"unknown VECTOR_BACKEND={backend!r}; valid values are chroma and milvus")
   return _vector_client
 
 
