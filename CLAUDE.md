@@ -77,7 +77,7 @@ npm install && npm run dev                    # http://127.0.0.1:5174
 
 `uv sync` is no longer enough now that the knowledge stack is in. Each of these fails in a way that looks like a different problem:
 
-1. **Copy the 13 RAG keys from `.env.example` into your `.env`.** `config/settings.py` declares them with no defaults and `settings = Settings()` runs at module scope, so a missing key raises `ValidationError` at **import** time — `import business_agent.api.app` dies before the server ever binds a port, and every `-m` command dies with it. (`Settings(_env_file=None)` reports all 20 required keys: the 7 original plus these 13.) Embedding reuses `LLM_API_KEY` / `LLM_BASE_URL` — there is no second credential to obtain.
+1. **Copy the 25 RAG keys from `.env.example` into your `.env`.** `config/settings.py` declares them with no defaults and `settings = Settings()` runs at module scope, so a missing key raises `ValidationError` at **import** time — `import business_agent.api.app` dies before the server ever binds a port, and every `-m` command dies with it. (`Settings(_env_file=None)` reports all 32 required keys: the 7 original plus these 25 — the count grew with the Milvus / rerank / HyDE / graph work, so re-run that command rather than trusting this number.) Embedding reuses `LLM_API_KEY` / `LLM_BASE_URL` — there is no second credential to obtain.
 
 2. **Budget real time for `uv sync`.** The RAG work added `chromadb`, `langchain-text-splitters` and the `[asyncio]` extra on `sqlalchemy`. The lock went from 63 packages to 115: Chroma drags in `onnxruntime`, `grpcio`, `tokenizers`, `numpy` and the whole `opentelemetry-*` set. That is a few hundred MB on first sync, not a few seconds.
 
@@ -105,6 +105,13 @@ npm install && npm run dev                    # http://127.0.0.1:5174
 
 Two retrieval chains ship in this repo. `.env.example` defaults to the first one because it needs
 nothing beyond an API key; the second is what the RAG rebuild delivered.
+
+**A checked-out `.env` is not the same as `.env.example`, and this is the file to read before
+believing anything below.** The main working tree currently runs the **Milvus + BGE-M3 + rerank**
+chain, not the Chroma default that `.env.example` ships. The two behave differently enough that
+guessing wrong wastes a debugging round: different score scale, different gate, ~3x the latency,
+and a model that has to load before the first retrieval. Run `grep -E '^(VECTOR_BACKEND|RERANK_ENABLED)=' .env`
+first.
 
 | | Chroma + DashScope | Milvus + BGE-M3 |
 |---|---|---|
@@ -156,6 +163,8 @@ uv run python -m business_agent.knowledge.ingest ingest --force   # re-embed eve
 uv run python -m business_agent.knowledge.ingest stats     # vector_chunks must equal metadata_chunks
 uv run python -m business_agent.knowledge.ingest query --text "退货运费谁承担"   # retrieval only, no LLM
 uv run python -m business_agent.knowledge.ingest calibrate  # re-derive the similarity threshold
+RERANK_ENABLED=false uv run python -m business_agent.knowledge.ingest calibrate \
+  --file knowledge_eval/calibration_set_zh.jsonl   # the CJK value, on the degraded path
 uv run python -m business_agent.knowledge.ingest traces --sender-id <id>  # what a past turn retrieved
 ```
 
@@ -198,7 +207,9 @@ Understanding one user message requires reading across `api/` → `services/` �
 
   The RAG path: `knowledge/ingest/` loads Markdown / TXT / CSV from `knowledge_source/`, splits (recursive separators for prose, one-chunk-per-entry for FAQ and CSV), embeds via DashScope `text-embedding-v3` and writes both the vectors (Chroma, through the four methods on `infrastructure/vector_client.py`) and the metadata (`repository/knowledge_repository.py`). At query time `KnowledgeRetriever` applies Top-K plus a cosine threshold and **returns an empty list on a miss** — the fallback wording is the responder's decision, not the provider's. `KnowledgeResponder` then sorts by score, trims to the token budget, and labels each chunk with its source in the prompt. Three paths never reach the LLM at all: a miss, a low-similarity result, and a vector-store/embedding outage all return constant text, so they cannot fabricate (spec 5.2, 验收 3). Every retrieval — hit, miss or outage — is written to `retrieval_traces` keyed by turn, and logged under the `business_agent.knowledge` logger.
 
-  **The similarity thresholds are calibrated, not arbitrary, and there are two of them on different scales.** `RERANK_SCORE_MIN` gates normal operation; `KNOWLEDGE_SCORE_THRESHOLD` is a *vector cosine* value that fires only on the degraded path, when rerank is down. Rerank relevance and vector cosine differ by roughly 4x, so copying one into the other silently disarms the gate it lands in — that mistake was made and caught on 2026-08-28, and `knowledge/graph.py` carries the mirror-image warning in `node_threshold`.
+  **The similarity thresholds are calibrated, not arbitrary, and there are three of them across two scales.** `RERANK_SCORE_MIN` gates normal operation. `KNOWLEDGE_SCORE_THRESHOLD` and `KNOWLEDGE_SCORE_THRESHOLD_CJK` are *vector cosine* values that fire only on the degraded path, when rerank is down. Rerank relevance and vector cosine differ by roughly 4x, so copying one into the other silently disarms the gate it lands in — that mistake was made and caught on 2026-08-28, and `knowledge/graph.py` carries the mirror-image warning in `node_rerank`.
+
+  **Why the degraded path needs two cosine values and the normal path needs one.** The corpus is English and BGE-M3 is multilingual, so a Chinese question is a *cross-lingual* retrieval and its cosine scores land ~0.10-0.13 lower than the same question in English. Measured 2026-08-29 with `RERANK_ENABLED=false`: English hits 0.7345-0.8230 against misses 0.5702-0.7485; Chinese hits 0.6172-0.6966 against misses 0.5446-0.6246. **The bands interleave** — the top English miss outscores every Chinese hit — so no single scalar gates both, and `knowledge/thresholds.py` picks by the script the question is written in. Rerank relevance does hold across languages, which is why the normal path stays on one number. Neither cosine value has a comfortable margin (English clears its top miss by 0.0015); both are set to favour the fallback over recall, which is the right bias for a path that only runs while rerank is down.
 
   Re-calibrate with `-m business_agent.knowledge.ingest calibrate` against `knowledge_eval/calibration_set.jsonl` after changing the embedding model, **the chunking, or the corpus** — englishifying the corpus voided both previously calibrated values. Note that `calibrate` reports against whichever scoring is currently active, so deriving the vector-scale value means running it with `RERANK_ENABLED=false`. `knowledge/ingest/splitter.py` documents how a shared FAQ prefix once collapsed the separable range.
 - **Chitchat** (`chitchat/`) — LLM free-form reply.
@@ -229,11 +240,10 @@ The Chroma index itself is **not** in MySQL — it is a local directory (`VECTOR
 
 These return successfully with placeholder content — they are not bugs to fix incidentally, they are scheduled 第一档 work. Do not treat their output as a runtime failure:
 
-- `task/action/customer/recommend_similar_products.py` — 28-line stub that replies "还没有接入正式的推荐系统".
 - **Knowledge-source priority routing (hit-and-stop) is not implemented** — it is 第二档 work (spec 3.1.2 附注, C.4.5). `KnowledgeResponder` no longer concatenates indiscriminately (it sorts by score, cuts to Top-K and to a token budget), but every provider named by the intent is still queried and their surviving chunks are merged. 第一档 relies on the 3.1.1 配置纪律 — no volatile data in the knowledge base — to keep sources from contradicting each other.
-- **The protocol is wired but nobody fills it.** `cards[]`, `suggestions[]` and `control_owner` now exist end to end (`domain/messages.py` → `api/schemas.py` → `chat_router.py` → the Vue frontend renders all three, per 附录 E). But **no producer sets them**: no action or responder ever constructs a `BotMessage` with `cards` or `suggestions`, and `ProcessedResult.control_owner` is hardcoded to `"AGENT"` — there is no handoff logic to move it to `PENDING_HUMAN` / `HUMAN`. The frontend's multi-card list and the three control-ownership states are therefore unreachable at runtime. Filling them is 第一档 work (3.3.3 商品推荐 and 3.3.4 人工接管), not a plumbing bug.
+- **The protocol is wired and filled.** `cards[]`, `suggestions[]` and `control_owner` all have producers now: `recommend_products.py` builds cards and quick replies, the collect steps in `user_flows.yml` carry `suggestions`, and `engines/dialogue_engine.py`'s handoff policy moves `control_owner` to `PENDING_HUMAN`. The one thing still missing is 第二档's handoff package — tier 1 only flips ownership.
 - The e-commerce service **now has** `POST /orders` (idempotent, decrements stock under a row lock) and `products.stock_quantity`. `stock_status` is still a `VARCHAR`, but it is now a **derived display value** — the single place that derives it is `_stock_label()` in `app/api.py`, and every "is it in stock" judgement reads the quantity. Both columns are kept in sync only by code that goes through `create_order`; anything that writes `stock_quantity` by hand must update the label too. Applying `docker/mysql/migrations/2026-08-28-stock-quantity-and-order-idempotency.sql` is **mandatory before running this code** (see the migrations table above).
-- **The UI is English, the Agent is Chinese.** `customer-service-frontend` was localized to English, but every prompt template in `prompt/jinja2/`, the YAML flows and the knowledge content are Chinese, so `qwen-plus` replies in Chinese inside an English shell. The four welcome quick-replies now send English text (`Request a refund`, …) into a Chinese intent set — intent matching is done by the LLM rather than string comparison, so it should hold, but it is unverified.
+- **Everything a user sees is English**, across all three services: prompts, YAML flow text, the knowledge corpus, the commerce catalogue, error messages and `/openapi.json`. The Agent answers in English even when asked in Chinese — that is set explicitly in the prompt templates, and the instruction only holds when it sits next to the generation point, not at the top of the template. What is deliberately still Chinese is listed under Code conventions; all of it is a matching key or a quoted test input, and none of it reaches a user.
 - One display-layer coupling worth knowing: order status values arrive from the commerce service **in Chinese** (`待发货`, `运输中`, …) and are used as lookup keys in `ORDER_STATUS_CLASS` / `ORDER_STATUS_LABEL` in `App.vue`. Translate the values, never the keys.
 
 - **`no_relevant_answer` is dead configuration.** `flow_config/system_flows.yml:158,196` defines a fallback branch keyed on `context['reason'] == 'no_relevant_answer'`, but nothing in Python ever writes that reason, and `ClarifyReason` (`plan/turn_plan.py:62`) has no such member. It has never run. **The retrieval-miss fallback does not go through it** — it lives in `KnowledgeResponder` as two constants and returns without calling the LLM (see the knowledge track above). Either delete the branch or wire it deliberately; do not assume it is the fallback path.
@@ -259,6 +269,14 @@ succeeding path return the same thing**, so nothing tells you anything went wron
   fingerprint absorbed them too.
 - FastAPI silently ignores query parameters it does not declare, so an old container answers
   `GET /products?attr=...` with 200 and every row — the filter looks like it worked.
+- `calibrate` could not see what it was calibrating. `KnowledgeRetriever(score_threshold=-1.0)`
+  disarms the gate so the raw score distribution is visible, but `graph.py`'s nodes read
+  `settings.knowledge_score_threshold` directly and the override never reached them — and the graph
+  is the checked-in configuration. Every miss was therefore reported as `top=0.0000`, which made
+  the hit and miss ranges look perfectly separated **no matter what the threshold was**: the
+  calibration confirmed itself. Fixed 2026-08-29 by carrying `top_k` and `score_threshold` in the
+  graph state; the real distribution turned out to overlap in both languages. `top_k` was being
+  dropped the same way, so `calibrate --top-k` had never done anything either.
 
 **Detection rule: never trust the return value of an operation; assert the state it was supposed
 to produce.** `ps` that the process exists, `count(*)` rather than a cached statistic, `grep -c`

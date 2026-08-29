@@ -51,6 +51,14 @@ class Settings(BaseSettings):
   knowledge_chunk_overlap: int          # overlap in estimated tokens; spec default 80-150
   knowledge_top_k: int                  # retrieval Top-K
   knowledge_score_threshold: float      # cosine threshold; below it counts as a miss (used when rerank is off)
+  # A second cosine threshold, for queries containing Han characters. It exists because the corpus
+  # is English and BGE-M3 is multilingual, so a Chinese question is a *cross-lingual* retrieval and
+  # its cosine scores land roughly 0.10-0.13 lower than the English equivalent. Measured on this
+  # corpus the two bands interleave — an English miss scores 0.7485, above every Chinese hit — so
+  # no single scalar can gate both, and one threshold conditioned on the query's script can.
+  # Only the degraded path reads either value; while rerank is up, RERANK_SCORE_MIN gates both
+  # languages on a scale that does hold across them.
+  knowledge_score_threshold_cjk: float
 
   # Reranking. When enabled the gate moves from the vector score to the rerank score — they mean
   # different things: vector similarity is "how alike", rerank is "can this answer the question".

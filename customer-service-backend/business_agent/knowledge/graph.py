@@ -1,34 +1,39 @@
 """
-知识轨道的 LangGraph 编排 —— 检索到作答的完整一张图。
+LangGraph orchestration for the knowledge track — retrieval through to answering, as one graph.
 
-## 为什么这条链路值得画成图
+## Why this path is worth drawing as a graph
 
-LangGraph 的价值在于表达**分叉与汇合**。如果流程是 A→B→C，普通函数调用更清楚，
-套一层 StateGraph 只是增加阅读成本。这条链路有两处真实分叉：
+LangGraph earns its keep by expressing **branching and joining**. For a straight A->B->C, plain
+function calls read better and a StateGraph only adds reading cost. This path has two real
+branches:
 
-1. **多路检索**（`node_multi_search` 分叉 → `node_join` 汇合）：原问题一路、
-   HyDE 假设性答案一路，RRF 融合。
-2. **三态分流**（`node_threshold` 之后的条件边）：命中 / 未命中 / 链路不可用。
+1. **Multi-route retrieval** (`node_multi_search` branches -> `node_join` merges): one route for
+   the original question, one for the HyDE hypothetical answer, fused with RRF.
+2. **Three-way split** (the conditional edges after `node_threshold`): hit / miss / unavailable.
 
-**第二处才是这张图真正的价值。**
+**The second one is what this graph is actually for.**
 
-## 这张图把一条安全约束变成了拓扑性质
+## The graph turns a safety constraint into a topological property
 
-规范 5.2 与验收 7.1-3 要求「未命中不得编造」。在函数式实现里，这个保证是
-`KnowledgeResponder.respond()` 中间的一句 `if not selected: return` ——它成立，
-但要读完整个函数、确认 `chain.ainvoke` 在那个 return 之后，才能确信。审计第二轮
-把「可溯源」判成桩，正是因为类似的东西藏在代码里看不出来。
+Spec 5.2 and acceptance 7.1-3 require that a miss must not fabricate. In a functional
+implementation that guarantee is one `if not selected: return` in the middle of
+`KnowledgeResponder.respond()` — true, but you have to read the whole function and confirm that
+`chain.ainvoke` comes after that return before you can believe it. The second audit round judged
+"traceable" to be a stub for exactly this reason: something real was there, but invisible in the code.
 
-画成图之后，`node_fallback` 与 `node_degrade` **在拓扑上就不通向 `node_answer`**。
-「兜底路径不可能调用 LLM」从一个需要阅读验证的性质，变成一个看图就能确认的性质。
+Drawn as a graph, `node_fallback` and `node_degrade` **have no topological path to
+`node_answer`**. "The fallback cannot call an LLM" stops being a property you verify by reading
+and becomes one you verify by looking at the edges.
 
-> **移植纪律**：`node_fallback` / `node_degrade` 里只允许返回常量文案。任何人想在
-> 这两个节点里加一次「让模型润色一下兜底话术」的调用，都是在破坏红线——那正是当初
-> 否掉 `no_relevant_answer` 分支的原因（它走 action_response 的 rephrase 模式会调 LLM）。
+> **Porting discipline**: `node_fallback` and `node_degrade` may only return constant text.
+> Anyone adding a "let the model polish the fallback wording" call inside those two nodes is
+> breaking the red line — that is precisely why the `no_relevant_answer` branch was rejected
+> (it goes through action_response's rephrase mode, which calls the LLM).
 
-节点类的组织方式照搬 knowledge_base/atguigu 的 main_graph2.py：
-`_init_nodes` / `_register_nodes` / `_setup_routes` + 懒编译。
-差异是本项目全链路 async，节点是 `async def`，执行走 `ainvoke`。
+The node classes are organised after knowledge_base/atguigu's main_graph2.py:
+`_init_nodes` / `_register_nodes` / `_setup_routes` plus lazy compilation.
+The difference is that this project is async throughout, so nodes are `async def` and execution
+goes through `ainvoke`.
 """
 import logging
 from typing import Any, TypedDict
@@ -42,6 +47,7 @@ from business_agent.infrastructure.reranker import RerankUnavailableError, cliff
 from business_agent.infrastructure.vector_client import VectorStoreUnavailableError, get_vector_client
 from business_agent.knowledge.fusion import rrf_merge
 from business_agent.knowledge.hyde import HydeUnavailableError, generate_hypothetical_answer
+from business_agent.knowledge.thresholds import resolve_vector_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +58,19 @@ OUTCOME_UNAVAILABLE = "unavailable"
 
 class QueryGraphState(TypedDict, total=False):
   """
-  Goal: 图的状态。节点之间唯一的通信方式——每个节点只读它需要的键、只写它产出的键，
-        LangGraph 负责合并。total=False 让节点可以只返回自己写的那几个键，
-        这是节点能独立测试的前提。
+  Goal: the graph's state, and the only way nodes communicate. Each node reads only the keys it
+        needs and writes only the keys it produces; LangGraph merges them. total=False lets a node
+        return just the keys it wrote, which is what makes a node testable on its own.
   """
   question: str
   source_types: list[str]
+  # Per-call overrides. Both default to the configured values; `calibrate` is the only caller that
+  # sets them, and it sets score_threshold to -1.0 to disarm the gate so the raw distribution is
+  # visible. Reading settings directly in a node instead of these keys is what made the override
+  # silently do nothing on the graph path — the calibration then measured a distribution the
+  # threshold had already censored, and no verdict it produced could ever report an overlap.
+  top_k: int
+  score_threshold: float
   hyde_doc: str
   matches_direct: list[Any]
   matches_hyde: list[Any]
@@ -69,10 +82,30 @@ class QueryGraphState(TypedDict, total=False):
   answer_chunks: list[Any]
 
 
+def _top_k(state: QueryGraphState) -> int:
+  """Goal: the effective Top-K — the per-call override if one was given, else the configured one."""
+  value = state.get("top_k")
+  return settings.knowledge_top_k if value is None else value
+
+
+def _score_threshold(state: QueryGraphState) -> float:
+  """
+  Goal: the effective vector threshold. Only the degraded path reads it; the normal path is gated
+        by rerank_score_min, which is on a different scale (see node_rerank). An explicit per-call
+        override wins, so calibration can disarm the gate; otherwise the shared resolver picks the
+        value calibrated for the script the question is written in.
+  """
+  value = state.get("score_threshold")
+  if value is not None:
+    return value
+  return resolve_vector_threshold(state.get("question") or "")
+
+
 class KnowledgeQueryGraph:
   """
-  Goal: 编排知识检索到作答的完整流程。对 Provider 以上透明——
-        调用方只看到「问一句、拿回分片与结局」，不感知图的存在。
+  Goal: orchestrate retrieval through to answering. Transparent above the provider layer —
+        a caller sees "ask a question, get chunks and an outcome" and never knows there is a
+        graph.
   """
 
   def __init__(self) -> None:
@@ -81,16 +114,17 @@ class KnowledgeQueryGraph:
     self._setup_routes()
     self._compiled: Any | None = None
 
-  # ---------------- 节点 ----------------
+  # ---------------- nodes ----------------
 
   async def node_entry(self, state: QueryGraphState) -> QueryGraphState:
-    """入口：规整输入。不做任何检索。"""
+    """Entry point: normalise the input. Retrieves nothing."""
     return {"question": (state.get("question") or "").strip()}
 
   async def node_hyde(self, state: QueryGraphState) -> QueryGraphState:
     """
-    生成假设性答案。关闭或失败时返回空串——下游据此跳过第二路，
-    退化成单路检索而不是整轮失败：HyDE 是增强项，不是必需项。
+    Generate a hypothetical answer. Returns an empty string when disabled or on failure, which
+    tells the downstream node to skip the second route and degrade to single-route retrieval
+    rather than failing the turn — HyDE is an enhancement, not a requirement.
     """
     if not settings.hyde_enabled:
       return {"hyde_doc": ""}
@@ -100,17 +134,17 @@ class KnowledgeQueryGraph:
       logger.warning("hyde_unavailable, single-path retrieval: %s", error)
       return {"hyde_doc": ""}
 
-  async def _search(self, text: str, source_types: list[str] | None) -> list[Any]:
+  async def _search(self, text: str, source_types: list[str] | None, top_k: int) -> list[Any]:
     embedded = await get_embedding_backend().embed_query(text)
     return await get_vector_client().query(
       vector=embedded.dense[0],
-      top_k=settings.rerank_candidates if settings.rerank_enabled else settings.knowledge_top_k,
+      top_k=settings.rerank_candidates if settings.rerank_enabled else top_k,
       filters={"source_type": source_types} if source_types else None,
       sparse_vector=embedded.sparse[0] if embedded.has_sparse else None,
     )
 
   async def node_search_direct(self, state: QueryGraphState) -> QueryGraphState:
-    """第一路：用原问题检索。"""
+    """First route: retrieve using the original question."""
     try:
       # Same reasoning as the function path: an empty index is an outage, not a miss.
       # "Not in our knowledge base" would be a false statement about a knowledge base that has
@@ -118,27 +152,30 @@ class KnowledgeQueryGraph:
       if await get_vector_client().count() == 0:
         raise VectorStoreUnavailableError(
           "vector index is empty — run `python -m business_agent.knowledge.ingest ingest --force`")
-      return {"matches_direct": await self._search(state["question"], state.get("source_types"))}
+      return {"matches_direct": await self._search(
+        state["question"], state.get("source_types"), _top_k(state))}
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
-      # 这一路挂了就是整条链路不可用——没有任何依据可以作答。
+      # If this route fails the whole chain is unavailable — there is no evidence to answer from.
       return {"matches_direct": [], "error": str(error)}
 
   async def node_search_hyde(self, state: QueryGraphState) -> QueryGraphState:
-    """第二路：用假设性答案检索。没有 hyde_doc 就跳过。"""
+    """Second route: retrieve using the hypothetical answer. Skipped when there is no hyde_doc."""
     hyde_doc = state.get("hyde_doc") or ""
     if not hyde_doc:
       return {"matches_hyde": []}
     try:
-      return {"matches_hyde": await self._search(hyde_doc, state.get("source_types"))}
+      return {"matches_hyde": await self._search(
+        hyde_doc, state.get("source_types"), _top_k(state))}
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
-      # 第二路挂了不影响第一路，不写 error——降级而不是失败。
+      # A failure here does not affect the first route, so no error is written — degrade, not fail.
       logger.warning("hyde_search_failed, keeping direct path only: %s", error)
       return {"matches_hyde": []}
 
   async def node_rrf(self, state: QueryGraphState) -> QueryGraphState:
     """
-    RRF 融合两路。按名次而非分数——两路的分数分布不同（HyDE 文本更长更书面），
-    按名次天然免疫这种尺度差异。
+    Fuse the two routes with RRF. By rank rather than by score: the two routes have different
+    score distributions (HyDE text is longer and more formal), and ranks are immune to that
+    difference in scale.
     """
     direct, hyde = state.get("matches_direct") or [], state.get("matches_hyde") or []
     if not hyde:
@@ -151,8 +188,9 @@ class KnowledgeQueryGraph:
 
   async def node_rerank(self, state: QueryGraphState) -> QueryGraphState:
     """
-    重排：分数语义从「像不像」换成「能不能回答」。
-    重排服务挂了退回向量分继续——精度下降但仍有依据，与向量库不可用不同。
+    Rerank: the score changes meaning from "how similar" to "can this answer the question".
+    If the rerank service is down, fall back to vector scores and carry on — less precise, but
+    still grounded, which is a different situation from the vector store being unavailable.
     """
     matches = state.get("matches_fused") or []
     if not matches or not settings.rerank_enabled:
@@ -160,9 +198,15 @@ class KnowledgeQueryGraph:
     try:
       scores = await rerank(state["question"], [match.document for match in matches])
     except RerankUnavailableError as error:
-      # 退回向量分时必须同时退回**向量阈值**。只退分数不退阈值的话，下游会拿
-      # rerank_score_min（0.155 量级）去卡向量分（0.6-0.8 量级），阈值等于失效，
-      # 几乎任何提问都判成命中——「兜底不可能编造」就从拓扑性质退回成提示词遵从性。
+      # Falling back to vector scores must also fall back to the **vector threshold**. Falling
+      # back on the score alone would leave the downstream gate comparing rerank_score_min (order
+      # 0.155) against vector scores (order 0.6-0.8): the threshold stops filtering, almost every
+      # question is judged a hit, and "the fallback cannot fabricate" degrades from a topological
+      # property into a matter of prompt compliance.
+      #
+      # The mirror-image mistake is just as easy to make and was made here on 2026-08-28: setting
+      # KNOWLEDGE_SCORE_THRESHOLD from a `calibrate` run that reported rerank-scale scores. The
+      # two scales differ by roughly 4x in either direction.
       logger.warning("rerank_unavailable, falling back to vector score AND vector threshold: %s", error)
       return {"matches_fused": matches, "scoring_degraded": True}
     ranked = sorted(zip(matches, scores), key=lambda pair: pair[1], reverse=True)
@@ -172,28 +216,33 @@ class KnowledgeQueryGraph:
 
   async def node_threshold(self, state: QueryGraphState) -> QueryGraphState:
     """
-    阈值判定 + 断崖截断。**这个节点只做判定，不产生任何话术**——
-    话术归下游三个节点，判定与措辞分开是这张图能读懂的前提。
+    Threshold check plus cliff cutoff. **This node only decides; it produces no wording.**
+    Wording belongs to the three nodes downstream, and keeping the decision separate from the
+    phrasing is what makes this graph readable.
     """
     if state.get("error"):
       return {"selected": [], "outcome": OUTCOME_UNAVAILABLE}
     matches = state.get("matches_fused") or []
-    # scoring_degraded 表示 rerank 挂了、分数是向量分——此时必须用向量阈值判定
+    # scoring_degraded means rerank is down and the scores are vector scores, so the vector
+    # threshold is the one that must be applied
+    top_k = _top_k(state)
     if settings.rerank_enabled and not state.get("scoring_degraded"):
       keep = cliff_cutoff([match.score for match in matches],
                           score_min=settings.rerank_score_min,
-                          max_top_k=settings.knowledge_top_k)
+                          max_top_k=top_k)
     else:
-      passed = [match for match in matches if match.score >= settings.knowledge_score_threshold]
-      keep = min(len(passed), settings.knowledge_top_k)
+      threshold = _score_threshold(state)
+      passed = [match for match in matches if match.score >= threshold]
+      keep = min(len(passed), top_k)
       matches = passed
     selected = matches[:keep]
     return {"selected": selected, "outcome": OUTCOME_ANSWERED if selected else OUTCOME_NO_HIT}
 
   def route_by_outcome(self, state: QueryGraphState) -> str:
     """
-    Goal: 三态分流。**这是本图最重要的一条边**——它把「兜底不调 LLM」
-          从一句藏在函数中间的 if 变成了拓扑上可见的性质。
+    Goal: the three-way split. **This is the most important edge in the graph** — it turns "the
+          fallback does not call an LLM" from an if buried inside a function into a property you
+          can see in the topology.
     """
     outcome = state.get("outcome")
     if outcome == OUTCOME_UNAVAILABLE:
@@ -203,23 +252,25 @@ class KnowledgeQueryGraph:
     return "node_answer"
 
   async def node_answer(self, state: QueryGraphState) -> QueryGraphState:
-    """命中：把选中的分片交给上层生成。图本身不调 LLM，生成留在 responder。"""
+    """Hit: hand the selected chunks up for generation. The graph itself never calls an LLM;
+    generation stays in the responder."""
     return {"answer_chunks": state.get("selected") or []}
 
   async def node_fallback(self, state: QueryGraphState) -> QueryGraphState:
-    """未命中。**只允许返回常量语义，不得在此调用 LLM。**"""
+    """Miss. **Constant semantics only — never call an LLM here.**"""
     return {"answer_chunks": []}
 
   async def node_degrade(self, state: QueryGraphState) -> QueryGraphState:
-    """链路不可用。**同样不得调用 LLM。**"""
+    """Chain unavailable. **Equally, never call an LLM here.**"""
     return {"answer_chunks": []}
 
-  # ---------------- 装配 ----------------
+  # ---------------- assembly ----------------
 
   def _register_nodes(self) -> None:
     self.workflow.add_node("node_entry", self.node_entry)
     self.workflow.add_node("node_hyde", self.node_hyde)
-    # 虚拟节点：只为表达分叉与汇合，不改状态。照搬 atguigu 的写法。
+    # Virtual nodes: they express the branch and the join and change no state. Same shape as
+    # atguigu's.
     self.workflow.add_node("node_multi_search", lambda state: {})
     self.workflow.add_node("node_search_direct", self.node_search_direct)
     self.workflow.add_node("node_search_hyde", self.node_search_hyde)
@@ -235,16 +286,16 @@ class KnowledgeQueryGraph:
     self.workflow.set_entry_point("node_entry")
     self.workflow.add_edge("node_entry", "node_hyde")
     self.workflow.add_edge("node_hyde", "node_multi_search")
-    # 分叉：两路检索并行
+    # Branch: the two retrieval routes
     self.workflow.add_edge("node_multi_search", "node_search_direct")
     self.workflow.add_edge("node_multi_search", "node_search_hyde")
-    # 汇合
+    # Join
     self.workflow.add_edge("node_search_direct", "node_join")
     self.workflow.add_edge("node_search_hyde", "node_join")
     self.workflow.add_edge("node_join", "node_rrf")
     self.workflow.add_edge("node_rrf", "node_rerank")
     self.workflow.add_edge("node_rerank", "node_threshold")
-    # 三态分流：兜底与降级在拓扑上不通向 node_answer
+    # Three-way split: fallback and degrade have no path to node_answer
     self.workflow.add_conditional_edges("node_threshold", self.route_by_outcome, {
       "node_answer": "node_answer",
       "node_fallback": "node_fallback",
@@ -254,24 +305,38 @@ class KnowledgeQueryGraph:
       self.workflow.add_edge(terminal, END)
 
   def compile(self) -> Any:
-    """懒编译：首次执行时编译一次，之后复用。"""
+    """Lazy compilation: compiled once on first execution, reused thereafter."""
     if self._compiled is None:
       self._compiled = self.workflow.compile()
     return self._compiled
 
-  async def run(self, question: str, source_types: list[str] | None = None) -> QueryGraphState:
+  async def run(self,
+                question: str,
+                source_types: list[str] | None = None,
+                top_k: int | None = None,
+                score_threshold: float | None = None) -> QueryGraphState:
     """
-    Goal: 跑一次检索。
-    Returns: QueryGraphState 含 outcome 与 selected；调用方据 outcome 决定话术
+    Goal: run one retrieval.
+    Args:
+        top_k / score_threshold: per-call overrides, None meaning "use the configured value".
+            They exist for calibration, and they must be carried in the state rather than read
+            from settings inside the nodes — see the note on QueryGraphState.
+    Returns: a QueryGraphState carrying outcome and selected; the caller picks its wording from
+             outcome
     """
-    return await self.compile().ainvoke({"question": question, "source_types": source_types or []})
+    initial: QueryGraphState = {"question": question, "source_types": source_types or []}
+    if top_k is not None:
+      initial["top_k"] = top_k
+    if score_threshold is not None:
+      initial["score_threshold"] = score_threshold
+    return await self.compile().ainvoke(initial)
 
 
 _graph: KnowledgeQueryGraph | None = None
 
 
 def get_knowledge_graph() -> KnowledgeQueryGraph:
-  """进程内单例：编译一次即可复用。"""
+  """Per-process singleton: compiled once and reused."""
   global _graph
   if _graph is None:
     _graph = KnowledgeQueryGraph()

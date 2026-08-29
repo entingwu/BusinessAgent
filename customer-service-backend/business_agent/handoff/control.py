@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from business_agent.config.settings import settings
+from business_agent.infrastructure.text import contains_cjk
 
 
 class ControlOwner(str, Enum):
@@ -136,10 +137,6 @@ class HandoffDecision:
   reason: str = ""
 
 
-def _has_cjk(text: str) -> bool:
-  return any("一" <= char <= "鿿" for char in text)
-
-
 def _hit(text: str, keywords: tuple[str, ...]) -> str | None:
   """
   Goal: report which keyword the text matched, matching Chinese and English each the right way
@@ -155,7 +152,7 @@ def _hit(text: str, keywords: tuple[str, ...]) -> str | None:
   """
   lowered = text.lower()
   for keyword in keywords:
-    if _has_cjk(keyword):
+    if contains_cjk(keyword):
       if keyword in text:
         return keyword
     elif re.search(rf"\b{re.escape(keyword.lower())}\b", lowered):

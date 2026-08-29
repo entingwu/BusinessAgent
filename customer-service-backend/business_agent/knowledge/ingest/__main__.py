@@ -4,7 +4,7 @@ Knowledge ingest command line.
     uv run python -m business_agent.knowledge.ingest ingest [--source-id X] [--force]
     uv run python -m business_agent.knowledge.ingest list
     uv run python -m business_agent.knowledge.ingest delete --source-id X
-    uv run python -m business_agent.knowledge.ingest query --text "七天无理由怎么算"
+    uv run python -m business_agent.knowledge.ingest query --text "who pays return shipping"
     uv run python -m business_agent.knowledge.ingest calibrate [--file path.jsonl]
     uv run python -m business_agent.knowledge.ingest stats
 
@@ -72,8 +72,9 @@ async def _cmd_stats(_args) -> None:
     "embedding_model": settings.embedding_model,
     "embedding_dimensions": settings.embedding_dimensions,
     "vector_backend": settings.vector_backend,
-    # 存储位置随后端而异：chroma 是本地目录，milvus 是服务地址。
-    # 无条件打印 Chroma 目录会让人以为用的是 Chroma。
+    # Where the vectors live depends on the backend: a local directory for chroma, a service
+    # address for milvus. Printing the Chroma directory unconditionally would leave people believing
+    # Chroma is what is running.
     "vector_store": (str(settings.resolved_vector_store_dir())
                      if settings.vector_backend == "chroma" else settings.milvus_uri),
     "collection": settings.vector_collection_name,
@@ -81,6 +82,11 @@ async def _cmd_stats(_args) -> None:
     "metadata_chunks": metadata_count,
     "top_k": settings.knowledge_top_k,
     "score_threshold": settings.knowledge_score_threshold,
+    # Both degraded-path thresholds are printed: which one applies is decided per question, so
+    # showing only one would misreport the configuration for half the traffic.
+    "score_threshold_cjk": settings.knowledge_score_threshold_cjk,
+    "rerank_enabled": settings.rerank_enabled,
+    "rerank_score_min": settings.rerank_score_min,
   }, ensure_ascii=False, indent=2))
 
 

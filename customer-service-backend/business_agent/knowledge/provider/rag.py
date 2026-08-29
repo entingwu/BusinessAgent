@@ -15,6 +15,7 @@ from business_agent.infrastructure.embedding import EmbeddingUnavailableError, g
 from business_agent.infrastructure.reranker import RerankUnavailableError, cliff_cutoff, rerank
 from business_agent.knowledge.fusion import rrf_merge
 from business_agent.knowledge.hyde import HydeUnavailableError, generate_hypothetical_answer
+from business_agent.knowledge.thresholds import resolve_vector_threshold
 from business_agent.infrastructure.vector_client import (
   ChromaVectorClient,
   VectorMatch,
@@ -37,7 +38,9 @@ class KnowledgeRetriever:
                score_threshold: float | None = None):
     self._vector_client = vector_client or get_vector_client()
     self._top_k = top_k if top_k is not None else settings.knowledge_top_k
-    self._score_threshold = score_threshold if score_threshold is not None else settings.knowledge_score_threshold
+    # Kept as None when not given, so the per-question resolver runs at call time. Storing a
+    # settings value here instead would freeze one language's threshold onto the instance.
+    self._score_threshold = score_threshold
     self._rerank_enabled = settings.rerank_enabled
     self._hyde_enabled = settings.hyde_enabled
 
@@ -65,12 +68,17 @@ class KnowledgeRetriever:
       return []
 
     effective_top_k = top_k if top_k is not None else self._top_k
-    effective_threshold = score_threshold if score_threshold is not None else self._score_threshold
+    # The threshold is resolved per question, not per retriever: the two calibrated values are on
+    # the same cosine scale but were measured on different query languages. An explicit override —
+    # per call, or per instance, which is how `calibrate` disarms the gate — still wins over both.
+    explicit = score_threshold if score_threshold is not None else self._score_threshold
+    effective_threshold = explicit if explicit is not None else resolve_vector_threshold(query_text)
 
     filters = {"source_type": list(source_types)} if source_types else None
 
-    # 图开启时把整条检索委托给 LangGraph。分歧只在这一处，
-    # Provider 与其以上完全不感知——图是实现细节不是接口。
+    # When the graph is on, the whole retrieval is delegated to LangGraph. This is the only place
+    # the two paths diverge — the Provider and everything above it are unaware, because the graph
+    # is an implementation detail rather than an interface.
     if settings.knowledge_graph_enabled:
       return await self._retrieve_via_graph(
         query_text, filters, effective_top_k, effective_threshold, provider_id)
@@ -89,10 +97,11 @@ class KnowledgeRetriever:
 
     try:
       embedded = await get_embedding_backend().embed_query(query_text)
-      # sparse 只有 bge_m3 后端产出；给了就走混合检索，没给就退化为纯 dense。
-      # 这一句是 dense-only 与 hybrid 两条路唯一的分叉点。
-      # 开了 rerank 就把召回加宽：向量检索负责「捞得全」，rerank 负责「排得准」。
-      # 只捞 Top-K 再重排等于让向量分决定了候选集，rerank 只能在它的错误里挑。
+      # Only the bge_m3 backend produces sparse vectors. If one is given we run hybrid search;
+      # otherwise this degrades to dense only. This line is the sole fork between the two paths.
+      # With rerank on, widen recall: vector search is responsible for finding everything, rerank
+      # for ordering it correctly. Retrieving only Top-K and then reranking lets the vector score
+      # decide the candidate set, leaving rerank to choose among its mistakes.
       recall_k = settings.rerank_candidates if self._rerank_enabled else effective_top_k
 
       async def search(embedding) -> list[VectorMatch]:
@@ -107,14 +116,16 @@ class KnowledgeRetriever:
       hyde_used = False
 
       if self._hyde_enabled:
-        # 第二路：先让 LLM 写一段书面语气的假设性答案，用它再检索一次。
-        # 目的是跨越「口语提问」与「书面条款」之间的措辞鸿沟。
+        # Second route: have the LLM write a hypothetical answer in the register of the documents,
+        # then retrieve with that. The point is to cross the wording gap between a spoken question
+        # and a written clause.
         try:
           hypothetical = await generate_hypothetical_answer(query_text)
           hyde_embedded = await get_embedding_backend().embed_query(hypothetical)
           hyde_matches = await search(hyde_embedded)
-          # RRF 按名次融合两路。按名次而不是按分数，是因为两路的分数分布不同
-          # （HyDE 文本更长更书面，整体偏高），按名次天然免疫这种尺度差异。
+          # RRF fuses the two routes by rank. By rank rather than by score, because the two score
+          # distributions differ (HyDE text is longer and more formal, so its scores run high), and
+          # rank-based fusion is immune to that difference in scale.
           matches = rrf_merge(
             [(matches, 1.0), (hyde_matches, settings.hyde_weight)],
             key=lambda match: match.id,
@@ -122,7 +133,8 @@ class KnowledgeRetriever:
           )
           hyde_used = True
         except (HydeUnavailableError, EmbeddingUnavailableError) as error:
-          # HyDE 是提升召回的增强项，挂了退回单路检索，不让整轮失败。
+          # HyDE improves recall; if it fails we fall back to the single route rather than failing
+          # the whole turn.
           logger.warning("hyde_unavailable falling back to single-path retrieval: %s", error)
     except (EmbeddingUnavailableError, VectorStoreUnavailableError) as error:
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
@@ -131,8 +143,10 @@ class KnowledgeRetriever:
     scoring = "vector"
     if self._rerank_enabled and matches:
       try:
-        # 重排：分数语义从「像不像」换成「能不能回答」。实测两者在表面句式相似时
-        # 会分道扬镳——「支持货到付款吗」的向量分 0.79（像强命中），rerank 0.17。
+        # Rerank: the meaning of the score changes from "does this look similar" to "can this
+        # answer the question". Measured, the two part company whenever surface phrasing is
+        # similar — "do you take cash on delivery" scored 0.79 by vector (which reads as a strong
+        # hit) and 0.17 by rerank.
         rerank_scores = await rerank(query_text, [match.document for match in matches])
         ranked = sorted(zip(matches, rerank_scores), key=lambda pair: pair[1], reverse=True)
         keep = cliff_cutoff(
@@ -141,15 +155,18 @@ class KnowledgeRetriever:
           max_top_k=effective_top_k,
         )
         matches = [match for match, _ in ranked[:keep]]
-        # 把 rerank 分写回 match.score：下游的阈值判定、溯源落库、日志用的都是它，
-        # 换算在这里一次完成，不让两套分数语义同时存在于下游。
+        # Write the rerank score back onto match.score: the threshold check, the trace rows and
+        # the logs downstream all read that field. Converting once here keeps two different score
+        # semantics from coexisting downstream.
         for match, (_, score) in zip(matches, ranked[:keep]):
           match.score = score
         rejected_pairs = [(match, score) for match, score in ranked[keep:]]
         scoring = "rerank"
       except RerankUnavailableError as error:
-        # 重排是提升精度的环节，它挂了不该让用户拿不到答案——退回向量分与向量阈值。
-        # 这条降级与「向量库不可用」不同：那个必须兜底转人工，这个可以继续。
+        # Rerank improves precision, and losing it should not leave the user without an answer —
+        # fall back to the vector score and the vector threshold. This degradation differs from
+        # "the vector store is unavailable": that one must fall back to a human, this one can carry
+        # on.
         logger.warning("rerank_unavailable falling back to vector score: %s", error)
         matches = [match for match in matches if match.score >= effective_threshold][:effective_top_k]
         rejected_pairs = []
@@ -180,21 +197,25 @@ class KnowledgeRetriever:
 
   async def _retrieve_via_graph(self, query_text, filters, top_k, threshold, provider_id):
     """
-    Goal: 走 LangGraph 编排的检索。与函数式那条产出相同的 list[KnowledgeChunk]。
-    Raises: KnowledgeUnavailableError 图判定为 unavailable 时抛出，让上层照旧降级
+    Goal: run retrieval through the LangGraph orchestration. Produces the same list[KnowledgeChunk]
+          as the functional path.
+    Raises: KnowledgeUnavailableError when the graph reports unavailable, so callers degrade as
+            before
     """
     from business_agent.knowledge.graph import OUTCOME_UNAVAILABLE, get_knowledge_graph
 
     source_types = (filters or {}).get("source_type")
-    state = await get_knowledge_graph().run(query_text, source_types)
+    state = await get_knowledge_graph().run(query_text, source_types, top_k, threshold)
     if state.get("outcome") == OUTCOME_UNAVAILABLE:
       error = state.get("error", "knowledge graph reported unavailable")
       logger.warning("knowledge_retrieval_unavailable filters=%s error=%s", filters, error)
       raise KnowledgeUnavailableError(error)
 
     chunks = [_to_chunk(match, provider_id) for match in (state.get("selected") or [])]
-    # rejected 与函数式那条对齐：被阈值挡掉的候选「差多少才够」是调阈值时唯一的数据来源，
-    # knowledge_repository 的注释也明写着来这行日志查。图路径漏掉它，那条承诺就不成立了。
+    # `rejected` mirrors the functional path: how far a threshold-rejected candidate fell short is
+    # the only data there is when tuning the threshold, and the comment in knowledge_repository
+    # points people at this log line explicitly. Dropping it on the graph path would break that
+    # promise.
     selected_ids = {chunk.chunk_id for chunk in chunks}
     rejected = [
       {"chunk_id": match.id, "score": round(match.score, 4)}
@@ -263,7 +284,13 @@ class VectorKnowledgeProvider(Provider):
 
 async def main_test():
   retriever = KnowledgeRetriever()
-  for question in ("七天无理由退货怎么算时间", "退款多久到账", "帮我看看今天火星的天气"):
+  # Two answerable questions plus one the corpus deliberately cannot answer, so a run exercises
+  # both the hit and the miss path. The Chinese probe is kept on purpose: the corpus is English and
+  # BGE-M3 is multilingual, so it is the one line here that exercises cross-lingual retrieval.
+  for question in ("What day does the 7-day no-questions-asked window start from",
+                   "How long until the money is back on my card",
+                   "退货运费谁承担",
+                   "What is the weather on Mars today"):
     chunks = await retriever.retrieve(question)
     print(f"\nQ: {question}  hits={len(chunks)}")
     for chunk in chunks:
